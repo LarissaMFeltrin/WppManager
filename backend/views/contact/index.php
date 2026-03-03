@@ -49,8 +49,21 @@ $this->params['breadcrumbs'][] = $this->title;
         <div class="card-body p-0">
             <?= GridView::widget([
                 'dataProvider' => $dataProvider,
-                'layout' => "{items}\n{pager}",
-                'tableOptions' => ['class' => 'table table-striped table-hover'],
+                'layout' => "{items}\n<div class='card-footer d-flex justify-content-between align-items-center'><div class='text-muted'>{summary}</div><div>{pager}</div></div>",
+                'tableOptions' => ['class' => 'table table-striped table-hover mb-0'],
+                'pager' => [
+                    'class' => \yii\widgets\LinkPager::class,
+                    'options' => ['class' => 'pagination pagination-sm mb-0'],
+                    'linkContainerOptions' => ['class' => 'page-item'],
+                    'linkOptions' => ['class' => 'page-link'],
+                    'disabledListItemSubTagOptions' => ['class' => 'page-link'],
+                    'maxButtonCount' => 7,
+                    'firstPageLabel' => '<i class="fas fa-angle-double-left"></i>',
+                    'lastPageLabel' => '<i class="fas fa-angle-double-right"></i>',
+                    'prevPageLabel' => '<i class="fas fa-angle-left"></i>',
+                    'nextPageLabel' => '<i class="fas fa-angle-right"></i>',
+                ],
+                'summary' => 'Mostrando {begin}-{end} de {totalCount} contatos',
                 'emptyText' => '<div class="text-center p-4 text-muted"><i class="fas fa-address-book" style="font-size:2rem;"></i><p class="mt-2">Nenhum contato encontrado.</p></div>',
                 'columns' => [
                     [
