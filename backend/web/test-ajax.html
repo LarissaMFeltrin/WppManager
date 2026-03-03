@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Teste AJAX</title></head>
+<body>
+<h1>Teste AJAX</h1>
+<div id="result">Aguardando...</div>
+<script>
+document.getElementById('result').textContent = 'JS executou! Fazendo fetch...';
+fetch('/chat/chat-list', { credentials: 'same-origin' })
+    .then(function(r) {
+        document.getElementById('result').textContent = 'HTTP ' + r.status + ' - ' + r.statusText;
+        return r.text();
+    })
+    .then(function(t) {
+        document.getElementById('result').textContent += ' | Dados: ' + t.substring(0, 200);
+    })
+    .catch(function(e) {
+        document.getElementById('result').textContent = 'ERRO: ' + e.message;
+    });
+</script>
+</body>
+</html>
