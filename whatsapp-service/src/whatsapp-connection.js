@@ -35,6 +35,11 @@ let pendingUnreadEvents = []; // [{id: chatJid, unreadCount: N}]
 let ownLid = null;           // LID (Linked Identity) da conta, para detectar msgs do WhatsApp Web
 let currentSaveCreds = null; // Referência à função saveCreds para graceful shutdown
 
+// === History loading state ===
+const historyLoadState = new Map(); // jid -> { status: 'loading'|'done'|'error', iteration, oldestTs }
+const historyLoadQueue = [];        // { jid, untilTimestamp }
+let historyLoadProcessing = false;
+
 // Limpar credenciais parciais para evitar login corrompido
 function cleanAuthDir() {
     try {
@@ -1132,6 +1137,192 @@ async function syncRecentMessages(jid, count = 50) {
     }
 }
 
+// === Carregamento automático de histórico de mensagens ===
+
+// Obter timestamp da mensagem mais antiga de um chat no banco
+async function getOldestMessageTimestamp(jid) {
+    const dbPool = db.getPool();
+    const [chatRows] = await dbPool.execute(
+        'SELECT id FROM chats WHERE account_id = ? AND chat_id = ?',
+        [ACCOUNT_ID, jid]
+    );
+    if (chatRows.length === 0) return null;
+    const [msgRows] = await dbPool.execute(
+        'SELECT MIN(timestamp) as oldest_ts FROM messages WHERE chat_id = ? AND timestamp > 0',
+        [chatRows[0].id]
+    );
+    return msgRows[0]?.oldest_ts || null;
+}
+
+// Contar mensagens de um chat no banco (para detectar quando batch foi processado)
+async function getMessageCount(jid) {
+    const dbPool = db.getPool();
+    const [chatRows] = await dbPool.execute(
+        'SELECT id FROM chats WHERE account_id = ? AND chat_id = ?',
+        [ACCOUNT_ID, jid]
+    );
+    if (chatRows.length === 0) return 0;
+    const [countRows] = await dbPool.execute(
+        'SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ?',
+        [chatRows[0].id]
+    );
+    return countRows[0].cnt;
+}
+
+// Carregar histórico de mensagens até uma data alvo (loop com batches de 50)
+async function loadHistoryUntil(jid, untilTimestamp) {
+    const MAX_ITERATIONS = 30;
+    const BATCH_SIZE = 50;
+    const DELAY_BETWEEN_BATCHES_MS = 5000;
+    const WAIT_FOR_MESSAGES_MS = 8000;
+    const POLL_INTERVAL_MS = 500;
+
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+
+    // Verificar se já está carregando
+    const existing = historyLoadState.get(jid);
+    if (existing && existing.status === 'loading') {
+        return { status: 'already_loading', iteration: existing.iteration };
+    }
+
+    // Se já carregou, verificar se ainda precisa
+    if (existing && existing.status === 'done') {
+        const currentOldest = await getOldestMessageTimestamp(jid);
+        if (currentOldest && currentOldest <= untilTimestamp) {
+            return { status: 'already_done', oldestTimestamp: currentOldest };
+        }
+    }
+
+    if (!sock || connectionStatus !== 'connected') {
+        return { status: 'error', error: 'WhatsApp nao conectado' };
+    }
+
+    // Verificar se já atingiu o target
+    const initialOldest = await getOldestMessageTimestamp(jid);
+    if (initialOldest && initialOldest <= untilTimestamp) {
+        historyLoadState.set(jid, { status: 'done', iteration: 0, oldestTs: initialOldest });
+        logger.info(`[loadHistory] ${jid} ja tem msgs desde ${new Date(initialOldest * 1000).toISOString()}`);
+        return { status: 'already_at_target', oldestTimestamp: initialOldest };
+    }
+
+    historyLoadState.set(jid, { status: 'loading', iteration: 0, oldestTs: initialOldest });
+    logger.info(`[loadHistory] Iniciando carga de historico de ${jid} ate ${new Date(untilTimestamp * 1000).toISOString()}`);
+
+    try {
+        for (let i = 0; i < MAX_ITERATIONS; i++) {
+            historyLoadState.set(jid, {
+                status: 'loading', iteration: i + 1,
+                oldestTs: await getOldestMessageTimestamp(jid)
+            });
+
+            if (!sock || connectionStatus !== 'connected') {
+                historyLoadState.set(jid, { status: 'error', iteration: i + 1, oldestTs: null });
+                logger.warn(`[loadHistory] ${jid} abortado - desconectado na iteracao ${i + 1}`);
+                return { status: 'error', error: 'Desconectado', iterations: i + 1 };
+            }
+
+            const countBefore = await getMessageCount(jid);
+
+            logger.info(`[loadHistory] ${jid} iteracao ${i + 1}/${MAX_ITERATIONS} - solicitando ${BATCH_SIZE} msgs...`);
+            try {
+                await fetchChatMessages(jid, BATCH_SIZE);
+            } catch (err) {
+                logger.error(`[loadHistory] ${jid} fetchChatMessages erro: ${err.message}`);
+                await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+                continue;
+            }
+
+            // Esperar messaging-history.set processar (poll DB a cada 500ms, max 8s)
+            let newMessagesArrived = false;
+            const waitStart = Date.now();
+            while (Date.now() - waitStart < WAIT_FOR_MESSAGES_MS) {
+                await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+                const countAfter = await getMessageCount(jid);
+                if (countAfter > countBefore) {
+                    newMessagesArrived = true;
+                    break;
+                }
+            }
+
+            if (!newMessagesArrived) {
+                const finalOldest = await getOldestMessageTimestamp(jid);
+                historyLoadState.set(jid, { status: 'done', iteration: i + 1, oldestTs: finalOldest });
+                logger.info(`[loadHistory] ${jid} concluido - sem mais msgs na iteracao ${i + 1}. Oldest: ${finalOldest ? new Date(finalOldest * 1000).toISOString() : 'nenhuma'}`);
+                return { status: 'done_no_more', iterations: i + 1, oldestTimestamp: finalOldest };
+            }
+
+            const currentOldest = await getOldestMessageTimestamp(jid);
+            if (currentOldest && currentOldest <= untilTimestamp) {
+                historyLoadState.set(jid, { status: 'done', iteration: i + 1, oldestTs: currentOldest });
+                logger.info(`[loadHistory] ${jid} target atingido na iteracao ${i + 1}! Oldest: ${new Date(currentOldest * 1000).toISOString()}`);
+                return { status: 'done_target_reached', iterations: i + 1, oldestTimestamp: currentOldest };
+            }
+
+            // Rate limit entre batches
+            if (i < MAX_ITERATIONS - 1) {
+                await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+            }
+        }
+
+        const finalOldest = await getOldestMessageTimestamp(jid);
+        historyLoadState.set(jid, { status: 'done', iteration: MAX_ITERATIONS, oldestTs: finalOldest });
+        logger.info(`[loadHistory] ${jid} max iteracoes (${MAX_ITERATIONS}) atingido. Oldest: ${finalOldest ? new Date(finalOldest * 1000).toISOString() : 'nenhuma'}`);
+        return { status: 'done_max_iterations', iterations: MAX_ITERATIONS, oldestTimestamp: finalOldest };
+
+    } catch (err) {
+        historyLoadState.set(jid, { status: 'error', iteration: 0, oldestTs: null });
+        logger.error(`[loadHistory] ${jid} erro fatal: ${err.message}`);
+        return { status: 'error', error: err.message };
+    }
+}
+
+// Processar fila de carregamento de histórico (um JID por vez)
+async function processHistoryQueue() {
+    if (historyLoadProcessing) return;
+    historyLoadProcessing = true;
+
+    while (historyLoadQueue.length > 0) {
+        const { jid, untilTimestamp } = historyLoadQueue.shift();
+        try {
+            await loadHistoryUntil(jid, untilTimestamp);
+        } catch (err) {
+            logger.error(`[historyQueue] Erro ao processar ${jid}: ${err.message}`);
+        }
+    }
+
+    historyLoadProcessing = false;
+}
+
+// Enfileirar carregamento de histórico (fire-and-forget)
+function enqueueHistoryLoad(jid, untilTimestamp) {
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+
+    const existing = historyLoadState.get(jid);
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        return { queued: false, reason: existing.status };
+    }
+
+    if (historyLoadQueue.some(item => item.jid === jid)) {
+        return { queued: false, reason: 'already_queued' };
+    }
+
+    historyLoadQueue.push({ jid, untilTimestamp });
+    logger.info(`[historyQueue] Enfileirado ${jid} (fila: ${historyLoadQueue.length})`);
+
+    processHistoryQueue();
+
+    return { queued: true, queueSize: historyLoadQueue.length };
+}
+
+// Status do carregamento de histórico de um JID
+function getHistoryLoadStatus(jid) {
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+    const state = historyLoadState.get(jid);
+    if (!state) return { status: 'not_started' };
+    const inQueue = historyLoadQueue.some(item => item.jid === jid);
+    return { ...state, inQueue };
+}
+
 // Graceful shutdown: salvar auth state antes do processo morrer
 // PM2 envia SIGINT, depois SIGTERM. Sem isso, escritas pendentes se perdem
 // e o auth_info fica corrompido, gerando PreKeyError no próximo start.
@@ -1169,4 +1360,6 @@ module.exports = {
     fetchChatMessages,
     syncRecentMessages,
     fetchProfilePicUrl,
+    enqueueHistoryLoad,
+    getHistoryLoadStatus,
 };

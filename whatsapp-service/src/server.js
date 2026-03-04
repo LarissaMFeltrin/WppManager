@@ -467,6 +467,36 @@ app.post('/api/sync-recent/:jid', async (req, res) => {
     }
 });
 
+// Carregar historico de mensagens ate uma data alvo (background, fire-and-forget)
+app.post('/api/load-history/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) {
+            jid = jid + '@s.whatsapp.net';
+        }
+        // Default: 01/01/2026 00:00:00 UTC
+        const untilTimestamp = parseInt(req.query.until) || Math.floor(new Date('2026-01-01T00:00:00Z').getTime() / 1000);
+        const result = wa.enqueueHistoryLoad(jid, untilTimestamp);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Status do carregamento de historico de um chat
+app.get('/api/load-history-status/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) {
+            jid = jid + '@s.whatsapp.net';
+        }
+        const status = wa.getHistoryLoadStatus(jid);
+        res.json({ success: true, ...status });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // Buscar foto de perfil de um contato (e salvar no banco)
 app.get('/api/profile-pic/:jid', async (req, res) => {
     try {
