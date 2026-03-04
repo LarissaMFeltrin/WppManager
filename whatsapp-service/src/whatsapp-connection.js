@@ -435,6 +435,48 @@ async function startConnection() {
                     logger.error(`[pos-sync] Erro finalizar fromMe: ${err.message}`);
                 }
             }, 30000);
+
+            // Reconciliação periódica: a cada 2 min
+            setInterval(async () => {
+                if (!syncComplete || !sock) return;
+                try {
+                    const pool = db.getPool();
+
+                    // 1) Finalizar conversas cuja ultima msg é fromMe (respondemos mas evento não chegou)
+                    const [fromMeStale] = await pool.execute(
+                        `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
+                         FROM conversas cv
+                         INNER JOIN chats ch ON ch.id = cv.chat_id
+                         INNER JOIN messages m ON m.chat_id = ch.id
+                           AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
+                         WHERE cv.status = 'aguardando'
+                           AND ch.account_id = ?
+                           AND m.is_from_me = 1`,
+                        [ACCOUNT_ID]
+                    );
+                    for (const cv of fromMeStale) {
+                        await db.finalizarConversaLida(cv.chat_db_id);
+                        recentlyFinalizedChats.set(cv.chat_jid, Date.now());
+                        logger.info(`[reconciliacao] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
+                    }
+
+                    // 2) Forçar refresh de estado: para cada chat aguardando, subscrever presença
+                    // Isso faz o WhatsApp enviar atualizações de estado (incluindo unreadCount) mais confiáveis
+                    const [filaChats] = await pool.execute(
+                        `SELECT DISTINCT ch.chat_id as jid
+                         FROM conversas cv
+                         INNER JOIN chats ch ON ch.id = cv.chat_id
+                         WHERE cv.status = 'aguardando' AND ch.account_id = ?
+                           AND ch.chat_id NOT LIKE '%@g.us'`,
+                        [ACCOUNT_ID]
+                    );
+                    for (const chat of filaChats) {
+                        try { await sock.presenceSubscribe(chat.jid); } catch (e) { /* ignore */ }
+                    }
+                } catch (err) {
+                    logger.error(`[reconciliacao] Erro: ${err.message}`);
+                }
+            }, 120000); // 2 minutos
         }
 
         if (connection === 'close') {

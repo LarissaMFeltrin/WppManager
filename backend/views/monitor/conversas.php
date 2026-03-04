@@ -122,6 +122,12 @@ $this->params['breadcrumbs'][] = $this->title;
 .msg-drawer-body .drawer-bubble .drawer-sender-name {
     font-size: 0.6rem; color: #075e54; font-weight: 600; margin-right: 3px;
 }
+.msg-drawer-body .drawer-bubble .drawer-quoted {
+    background: rgba(0,0,0,0.05); border-left: 3px solid #06cf9c; border-radius: 4px;
+    padding: 4px 8px; margin-bottom: 4px; font-size: 0.75rem; color: #667781;
+    max-height: 60px; overflow: hidden;
+}
+.msg-drawer-body .drawer-bubble.sent .drawer-quoted { border-left-color: #075e54; }
 
 @media (max-width: 600px) {
     .msg-drawer { width: 100%; }
@@ -481,6 +487,9 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 if (!msg.is_from_me && msg.sender_name) {
                     html += '<div class="drawer-sender">' + esc(msg.sender_name) + '</div>';
+                }
+                if (msg.quoted_text) {
+                    html += '<div class="drawer-quoted">' + esc(msg.quoted_text) + '</div>';
                 }
                 if (msg.message_type && msg.message_type !== 'text') {
                     var labels = {image:'Imagem',video:'Video',audio:'Audio',document:'Documento',sticker:'Sticker',location:'Localizacao',contact:'Contato'};
