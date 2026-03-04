@@ -383,25 +383,25 @@ async function startConnection() {
                     pendingUnreadEvents = [];
                 }
 
-                // Backup: verificar chats marcados manualmente como não lido (unread_count = -1)
-                // O unread_count = -1 vem do chats.upsert/messaging-history.set e significa
-                // que alguem marcou deliberadamente como nao lido no WhatsApp
+                // Backup: verificar chats não lidos no DB sem conversa ativa
+                // unread_count = -1: marcado manualmente como não lido
+                // unread_count >= 1: tem N msgs não lidas (evento pode ter sido perdido no restart/cooldown)
                 try {
                     const pool = db.getPool();
                     const [markedChats] = await pool.execute(
-                        `SELECT c.id, c.chat_id, c.chat_name, c.chat_type
+                        `SELECT c.id, c.chat_id, c.chat_name, c.chat_type, c.unread_count
                          FROM chats c
                          LEFT JOIN conversas cv ON cv.chat_id = c.id AND cv.status IN ('aguardando', 'em_atendimento')
-                         WHERE c.account_id = ? AND c.unread_count = -1 AND cv.id IS NULL
+                         WHERE c.account_id = ? AND (c.unread_count = -1 OR c.unread_count >= 1) AND cv.id IS NULL
                            AND c.chat_id NOT LIKE '%@newsletter' AND c.chat_id NOT LIKE '%@lid'
                            AND c.chat_id != 'status@broadcast'`,
                         [ACCOUNT_ID]
                     );
                     if (markedChats.length > 0) {
-                        logger.info(`[pos-sync] ${markedChats.length} chat(s) marcados como nao lido no DB...`);
+                        logger.info(`[pos-sync] ${markedChats.length} chat(s) não lidos no DB sem conversa ativa...`);
                         for (const chat of markedChats) {
                             await db.reabrirConversa(chat.id, ACCOUNT_ID);
-                            logger.info(`[pos-sync] Conversa reaberta para ${chat.chat_name || chat.chat_id} (marcado como nao lido)`);
+                            logger.info(`[pos-sync] Conversa reaberta para ${chat.chat_name || chat.chat_id} (unread=${chat.unread_count})`);
                         }
                     }
                 } catch (err) {
@@ -409,7 +409,7 @@ async function startConnection() {
                 }
 
                 // Finalizar conversas aguardando onde a ultima msg é fromMe (já respondemos)
-                // Isso cobre msgs fromMe que chegaram durante o sync (antes de syncComplete)
+                // MAS respeitar chats marcados como não lidos (unread_count >= 1 ou -1)
                 try {
                     const pool = db.getPool();
                     const [staleConversas] = await pool.execute(
@@ -420,7 +420,8 @@ async function startConnection() {
                            AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
                          WHERE cv.status = 'aguardando'
                            AND ch.account_id = ?
-                           AND m.is_from_me = 1`,
+                           AND m.is_from_me = 1
+                           AND ch.unread_count = 0`,
                         [ACCOUNT_ID]
                     );
                     if (staleConversas.length > 0) {
@@ -443,6 +444,7 @@ async function startConnection() {
                     const pool = db.getPool();
 
                     // 1) Finalizar conversas cuja ultima msg é fromMe (respondemos mas evento não chegou)
+                    // Respeitar chats marcados como não lidos (unread_count >= 1 ou -1)
                     const [fromMeStale] = await pool.execute(
                         `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
                          FROM conversas cv
@@ -451,7 +453,8 @@ async function startConnection() {
                            AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
                          WHERE cv.status = 'aguardando'
                            AND ch.account_id = ?
-                           AND m.is_from_me = 1`,
+                           AND m.is_from_me = 1
+                           AND ch.unread_count = 0`,
                         [ACCOUNT_ID]
                     );
                     for (const cv of fromMeStale) {
@@ -460,8 +463,23 @@ async function startConnection() {
                         logger.info(`[reconciliacao] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
                     }
 
-                    // 2) Forçar refresh de estado: para cada chat aguardando, subscrever presença
-                    // Isso faz o WhatsApp enviar atualizações de estado (incluindo unreadCount) mais confiáveis
+                    // 2) Reabrir chats não lidos no DB que não têm conversa ativa
+                    // Cobre: cooldown que bloqueou reopen, eventos perdidos entre restarts
+                    const [unreadNoConv] = await pool.execute(
+                        `SELECT c.id, c.chat_id, c.chat_name, c.unread_count
+                         FROM chats c
+                         LEFT JOIN conversas cv ON cv.chat_id = c.id AND cv.status IN ('aguardando', 'em_atendimento')
+                         WHERE c.account_id = ? AND (c.unread_count = -1 OR c.unread_count >= 1) AND cv.id IS NULL
+                           AND c.chat_id NOT LIKE '%@newsletter' AND c.chat_id NOT LIKE '%@lid'
+                           AND c.chat_id != 'status@broadcast'`,
+                        [ACCOUNT_ID]
+                    );
+                    for (const chat of unreadNoConv) {
+                        await db.reabrirConversa(chat.id, ACCOUNT_ID);
+                        logger.info(`[reconciliacao] Conversa reaberta para ${chat.chat_name || chat.chat_id} (unread=${chat.unread_count})`);
+                    }
+
+                    // 3) Forçar refresh de estado: para cada chat aguardando, subscrever presença
                     const [filaChats] = await pool.execute(
                         `SELECT DISTINCT ch.chat_id as jid
                          FROM conversas cv
