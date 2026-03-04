@@ -1,10 +1,11 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, makeCacheableSignalKeyStore, fetchLatestWaWebVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, Browsers, makeCacheableSignalKeyStore, fetchLatestWaWebVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const NodeCache = require('node-cache');
 const fs = require('fs');
 const path = require('path');
 const db = require('./database');
+const { useMySQLAuthState, migrateFromFiles } = require('./mysql-auth-state');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const ACCOUNT_ID = parseInt(process.env.ACCOUNT_ID || '2');
@@ -339,12 +340,11 @@ async function processMessage(msg, chatDbId, fromMe) {
 // === Health check e reparo automático do auth state ===
 // Executa ANTES de cada conexão para prevenir perda de mensagens por E2EE
 async function repairAuthState(state, saveCreds) {
-    const authDir = path.resolve(AUTH_DIR);
+    const pool = db.getPool();
     let changed = false;
 
     // 1. Garantir que registered = true (se false, Baileys pode se comportar como novo login)
     if (!state.creds.registered) {
-        // Se já tem credenciais completas (me, account), é uma conexão existente
         if (state.creds.me && state.creds.account) {
             logger.warn('[auth-repair] creds.registered era false com credenciais existentes - corrigindo para true');
             state.creds.registered = true;
@@ -352,18 +352,18 @@ async function repairAuthState(state, saveCreds) {
         }
     }
 
-    // 2. Verificar consistência de pre-keys: local vs nextPreKeyId
-    //    Se nextPreKeyId > maior pre-key local + 1, temos pre-keys fantasma no servidor
-    const preKeyFiles = fs.readdirSync(authDir).filter(f => f.startsWith('pre-key-') && f.endsWith('.json'));
-    const localPreKeyIds = preKeyFiles.map(f => parseInt(f.replace('pre-key-', '').replace('.json', ''))).filter(n => !isNaN(n));
+    // 2. Verificar consistência de pre-keys: local (MySQL) vs nextPreKeyId
+    const [preKeyRows] = await pool.execute(
+        "SELECT key_id FROM baileys_auth WHERE account_id = ? AND key_type = 'pre-key'",
+        [ACCOUNT_ID]
+    );
+    const localPreKeyIds = preKeyRows.map(r => parseInt(r.key_id)).filter(n => !isNaN(n));
     const maxLocalId = localPreKeyIds.length > 0 ? Math.max(...localPreKeyIds) : 0;
     const nextId = state.creds.nextPreKeyId || 0;
     const firstUnuploaded = state.creds.firstUnuploadedPreKeyId || 0;
 
-    logger.info(`[auth-repair] Pre-keys: ${localPreKeyIds.length} locais (max ID: ${maxLocalId}), nextPreKeyId: ${nextId}, firstUnuploaded: ${firstUnuploaded}`);
+    logger.info(`[auth-repair] Pre-keys: ${localPreKeyIds.length} no MySQL (max ID: ${maxLocalId}), nextPreKeyId: ${nextId}, firstUnuploaded: ${firstUnuploaded}`);
 
-    // Se há gap entre max local e nextPreKeyId, temos pre-keys fantasma
-    // (foram geradas/uploadadas mas as privadas foram perdidas em crash)
     const gapSize = nextId - maxLocalId - 1;
     if (gapSize > 3 && maxLocalId > 0) {
         logger.warn(`[auth-repair] Gap de ${gapSize} pre-keys detectado (IDs ${maxLocalId + 1} a ${nextId - 1} perdidas)`);
@@ -379,29 +379,18 @@ async function repairAuthState(state, saveCreds) {
         changed = true;
     }
 
-    // 4. Limpar sessões corrompidas de contatos individuais
-    //    Sessões com tamanho muito pequeno (<100 bytes) provavelmente estão incompletas
-    const sessionFiles = fs.readdirSync(authDir).filter(f => f.startsWith('session-') && f.endsWith('.json'));
-    let removedSessions = 0;
-    for (const sf of sessionFiles) {
-        const fullPath = path.join(authDir, sf);
-        try {
-            const stat = fs.statSync(fullPath);
-            if (stat.size < 50) {
-                fs.unlinkSync(fullPath);
-                removedSessions++;
-                logger.warn(`[auth-repair] Sessão corrompida removida: ${sf} (${stat.size} bytes)`);
-            }
-        } catch (e) { /* ignore */ }
-    }
-    if (removedSessions > 0) {
-        logger.info(`[auth-repair] ${removedSessions} sessão(ões) corrompida(s) removida(s)`);
+    // 4. Limpar sessões corrompidas no MySQL (dados muito pequenos)
+    const [removed] = await pool.execute(
+        "DELETE FROM baileys_auth WHERE account_id = ? AND key_type = 'session' AND LENGTH(key_data) < 50",
+        [ACCOUNT_ID]
+    );
+    if (removed.affectedRows > 0) {
+        logger.info(`[auth-repair] ${removed.affectedRows} sessão(ões) corrompida(s) removida(s) do MySQL`);
     }
 
-    // Salvar se houve alterações
     if (changed) {
         await saveCreds();
-        logger.info('[auth-repair] Auth state reparado e salvo');
+        logger.info('[auth-repair] Auth state reparado e salvo no MySQL');
     }
 }
 
@@ -425,7 +414,17 @@ async function startConnection() {
         logger.warn(`Falha ao buscar versao, usando fallback: ${waVersion.join('.')}`);
     }
 
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    // === Auth State: MySQL (transacional) com fallback para JSON files ===
+    const pool = db.getPool();
+    // Migrar dados existentes dos JSON files para MySQL (apenas na primeira vez)
+    const migrationResult = await migrateFromFiles(pool, ACCOUNT_ID, AUTH_DIR);
+    if (migrationResult.migrated) {
+        logger.info(`[auth-mysql] Migrados ${migrationResult.count} arquivos de auth para MySQL`);
+    } else {
+        logger.info(`[auth-mysql] Migração não necessária: ${migrationResult.reason}`);
+    }
+
+    const { state, saveCreds } = await useMySQLAuthState(pool, ACCOUNT_ID);
     currentSaveCreds = saveCreds; // Guardar ref para graceful shutdown
 
     // === Health check de auth state (pre-keys e sessões) ===
@@ -999,18 +998,38 @@ async function startConnection() {
                 }
 
                 // Quando NÓS respondemos, finalizar conversa aguardando.
-                // Distinguir: msg do nosso sistema (panel) ou WhatsApp Web (LID) = humano → finalizar
-                // msg fromMe mas não rastreada = possível auto-resposta WhatsApp Business → ignorar
+                // Proteção contra auto-resposta WA Business: se a conversa foi criada há < 30s,
+                // a msg fromMe pode ser auto-greeting. Se > 30s, é humano (WhatsApp Web ou painel).
                 if (fromMe && syncComplete) {
                     // Limpar timer de espera do cliente (atendente respondeu)
                     await db.clearClienteAguardando(chatDbId);
                     const iFromOurSystem = isSentBySystem(msg.key.id);
                     const isFromWhatsAppWeb = !msg.key.fromMe && isOwnMessage(msg); // LID em grupos
+
                     if (iFromOurSystem || isFromWhatsAppWeb) {
+                        // Msg enviada pelo nosso painel ou detectada via LID → finalizar sempre
                         await db.finalizarConversaLida(chatDbId);
                         recentlyFinalizedChats.set(chatJid, Date.now());
                     } else {
-                        logger.info(`→ [${chatJid}] fromMe ignorado para finalizacao (possivel auto-resposta WA Business)`);
+                        // Msg fromMe de outro dispositivo (WhatsApp Web) ou auto-resposta
+                        // Verificar idade da conversa: < 30s = provável auto-resposta, > 30s = humano
+                        const pool = db.getPool();
+                        const [cvRows] = await pool.execute(
+                            "SELECT id, iniciada_em FROM conversas WHERE chat_id = ? AND status IN ('aguardando', 'em_atendimento') ORDER BY id DESC LIMIT 1",
+                            [chatDbId]
+                        );
+                        if (cvRows.length > 0) {
+                            const iniciadaMs = new Date(cvRows[0].iniciada_em).getTime();
+                            const ageSeconds = (Date.now() - iniciadaMs) / 1000;
+                            if (ageSeconds > 30) {
+                                // Conversa tem mais de 30s → humano respondeu via WhatsApp Web
+                                logger.info(`→ [${chatJid}] fromMe via WhatsApp Web detectado (conversa com ${Math.round(ageSeconds)}s), finalizando`);
+                                await db.finalizarConversaLida(chatDbId);
+                                recentlyFinalizedChats.set(chatJid, Date.now());
+                            } else {
+                                logger.info(`→ [${chatJid}] fromMe ignorado (conversa com ${Math.round(ageSeconds)}s, possivel auto-resposta WA Business)`);
+                            }
+                        }
                     }
                 }
 
