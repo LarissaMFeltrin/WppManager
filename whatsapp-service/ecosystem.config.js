@@ -7,6 +7,7 @@ module.exports = {
     {
       name: 'wpp-suporte',
       script: 'src/server.js',
+      kill_timeout: 5000, // 5s para graceful shutdown (salvar auth state)
       env: {
         PORT: 3000,
         ACCOUNT_ID: 3,
