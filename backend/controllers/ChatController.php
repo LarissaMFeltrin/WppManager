@@ -72,14 +72,17 @@ class ChatController extends BaseController
         }
 
         // Na carga inicial (sem after_id), sincronizar mensagens do WhatsApp
-        // para pegar mensagens que possam ter sido perdidas durante restarts
+        // sync-recent: busca msgs recentes que possam ter sido perdidas por falhas de E2EE
+        // sync-chat: busca histórico mais antigo (scroll up)
         if (!$after_id) {
             try {
-                $nodeUrl = $this->getServiceUrl($chat) . '/api/sync-chat/' . urlencode($chat->chat_id);
+                $baseUrl = $this->getServiceUrl($chat);
+                $jid = urlencode($chat->chat_id);
                 $ctx = stream_context_create([
                     'http' => ['method' => 'POST', 'timeout' => 5, 'header' => 'Content-Type: application/json'],
                 ]);
-                @file_get_contents($nodeUrl, false, $ctx);
+                @file_get_contents($baseUrl . '/api/sync-recent/' . $jid, false, $ctx);
+                @file_get_contents($baseUrl . '/api/sync-chat/' . $jid, false, $ctx);
             } catch (\Throwable $e) {
                 // Ignorar erros - sync é best-effort
             }
