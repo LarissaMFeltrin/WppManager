@@ -18,13 +18,16 @@ function getPool() {
 }
 
 // Salvar ou atualizar contato
-async function upsertContact(accountId, jid, name, phoneNumber) {
+async function upsertContact(accountId, jid, name, phoneNumber, profilePicUrl) {
     const db = getPool();
+    const hasPic = profilePicUrl !== undefined && profilePicUrl !== null;
     await db.execute(
-        `INSERT INTO contacts (account_id, jid, name, phone_number, created_at, updated_at)
-         VALUES (?, ?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE name = COALESCE(VALUES(name), name), phone_number = COALESCE(VALUES(phone_number), phone_number), updated_at = NOW()`,
-        [accountId, jid, name || null, phoneNumber || null]
+        `INSERT INTO contacts (account_id, jid, name, phone_number, profile_picture_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE name = COALESCE(VALUES(name), name), phone_number = COALESCE(VALUES(phone_number), phone_number),
+            ${hasPic ? 'profile_picture_url = VALUES(profile_picture_url),' : ''}
+            updated_at = NOW()`,
+        [accountId, jid, name || null, phoneNumber || null, profilePicUrl || null]
     );
 }
 

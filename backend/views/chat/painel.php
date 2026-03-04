@@ -1216,6 +1216,7 @@ document.addEventListener('DOMContentLoaded', function() {
         s.chatJid = data.chat_jid || data.chatJid;
         s.clienteNome = data.cliente_nome || data.clienteNome || 'Cliente';
         s.clienteNumero = data.cliente_numero || data.clienteNumero || '';
+        s.profilePicUrl = data.profile_picture_url || null;
         s.lastMsgId = 0;
         s.hasNewMsg = false;
         s.avatarColor = getAvatarColor(s.clienteNome);
@@ -1230,7 +1231,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function deactivateSlot(idx) {
         var s = slots[idx];
         s.conversaId = null; s.chatId = null; s.chatJid = null;
-        s.clienteNome = null; s.clienteNumero = null;
+        s.clienteNome = null; s.clienteNumero = null; s.profilePicUrl = null;
         s.lastMsgId = 0; s.hasNewMsg = false; s.isSending = false;
         s.replyingToKey = null; s.editingKey = null;
 
@@ -1243,10 +1244,13 @@ document.addEventListener('DOMContentLoaded', function() {
     function buildSlotHtml(idx, s) {
         var initials = getInitials(s.clienteNome);
         var color = s.avatarColor;
+        var avatarHtml = s.profilePicUrl
+            ? '<img class="slot-avatar" src="' + escapeHtml(s.profilePicUrl) + '" style="background:' + color + ';object-fit:cover;" onerror="this.outerHTML=\'<div class=slot-avatar style=background:' + color + '>' + escapeHtml(initials) + '</div>\'">'
+            : '<div class="slot-avatar" style="background:' + color + ';">' + escapeHtml(initials) + '</div>';
         return ''
             // Header
             + '<div class="slot-header">'
-            + '<div class="slot-avatar" style="background:' + color + ';">' + escapeHtml(initials) + '</div>'
+            + avatarHtml
             + '<div class="slot-header-info">'
             + '<div class="slot-client-name" title="' + escapeAttr(s.clienteNome) + '">' + escapeHtml(s.clienteNome) + ' <i class="fas fa-pen btn-edit-name" data-slot="' + idx + '" title="Editar nome" style="font-size:0.6rem;color:#999;cursor:pointer;"></i></div>'
             + '<div class="slot-client-number">' + escapeHtml(s.clienteNumero || s.chatJid || '') + '</div>'
@@ -2048,9 +2052,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 var c = resp.conversas[i];
                 var color = getAvatarColor(c.cliente_nome);
                 var initials = getInitials(c.cliente_nome);
+                var avatarHtml = c.profile_picture_url
+                    ? '<img src="' + escapeHtml(c.profile_picture_url) + '" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" onerror="this.outerHTML=\'<div class=slot-avatar style=background:' + color + ';width:40px;height:40px;font-size:0.8rem>' + escapeHtml(initials) + '</div>\'">'
+                    : '<div class="slot-avatar" style="background:' + color + ';width:40px;height:40px;font-size:0.8rem;">' + escapeHtml(initials) + '</div>';
                 html += '<div class="fila-card">'
                     + '<div class="d-flex align-items-center" style="gap:10px;">'
-                    + '<div class="slot-avatar" style="background:' + color + ';width:40px;height:40px;font-size:0.8rem;">' + escapeHtml(initials) + '</div>'
+                    + avatarHtml
                     + '<div style="flex:1;min-width:0;">'
                     + '<div class="fila-card-nome">' + escapeHtml(c.cliente_nome) + '</div>'
                     + '<div class="fila-card-numero">' + escapeHtml(c.cliente_numero) + '</div>'

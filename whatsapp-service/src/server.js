@@ -467,6 +467,22 @@ app.post('/api/sync-recent/:jid', async (req, res) => {
     }
 });
 
+// Buscar foto de perfil de um contato (e salvar no banco)
+app.get('/api/profile-pic/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+        const url = await wa.fetchProfilePicUrl(jid);
+        if (url) {
+            const ACCOUNT_ID = parseInt(process.env.ACCOUNT_ID || '2');
+            await db.upsertContact(ACCOUNT_ID, jid, null, null, url);
+        }
+        res.json({ success: true, url: url || null });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // ========== START ==========
 
 async function start() {
