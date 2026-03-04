@@ -97,6 +97,29 @@ const MIME_EXTENSIONS = {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
 };
 
+// Cache de fotos de perfil já buscadas nesta sessão (evita chamadas repetidas)
+const profilePicCache = new NodeCache({ stdTTL: 3600, checkperiod: 120 }); // 1h TTL
+
+// Buscar URL da foto de perfil de um contato
+async function fetchProfilePicUrl(jid) {
+    if (!sock || !jid) return undefined;
+    // Não buscar para grupos, newsletters, broadcasts, LIDs
+    if (!jid.endsWith('@s.whatsapp.net')) return undefined;
+
+    const cached = profilePicCache.get(jid);
+    if (cached !== undefined) return cached || undefined; // null = sem foto (cached)
+
+    try {
+        const url = await sock.profilePictureUrl(jid, 'image');
+        profilePicCache.set(jid, url || null);
+        return url || undefined;
+    } catch (err) {
+        // 404 = sem foto, 401 = privacidade - ambos normais
+        profilePicCache.set(jid, null);
+        return undefined;
+    }
+}
+
 // Tipos de mensagem que contêm mídia baixável
 const MEDIA_TYPES = ['image', 'video', 'audio', 'document', 'sticker'];
 
@@ -618,7 +641,8 @@ async function startConnection() {
         for (const contact of contacts) {
             try {
                 const phone = jidToPhone(contact.id);
-                await db.upsertContact(ACCOUNT_ID, contact.id, contact.name || contact.notify || null, phone);
+                const picUrl = await fetchProfilePicUrl(contact.id);
+                await db.upsertContact(ACCOUNT_ID, contact.id, contact.name || contact.notify || null, phone, picUrl);
                 count++;
             } catch (err) {
                 logger.error(`Erro ao salvar contato ${contact.id}: ${err.message}`);
@@ -727,7 +751,8 @@ async function startConnection() {
                 const contactJid = fromMe ? chatJid : (msg.key.participant || chatJid);
                 const phone = jidToPhone(contactJid);
                 if (!fromMe) {
-                    await db.upsertContact(ACCOUNT_ID, contactJid, pushName, phone);
+                    const picUrl = await fetchProfilePicUrl(contactJid);
+                    await db.upsertContact(ACCOUNT_ID, contactJid, pushName, phone, picUrl);
                 }
 
                 const ts = await processMessage(msg, chatDbId, fromMe);
@@ -1141,4 +1166,5 @@ module.exports = {
     fetchGroupName,
     fetchChatMessages,
     syncRecentMessages,
+    fetchProfilePicUrl,
 };

@@ -52,6 +52,27 @@ $this->params['breadcrumbs'][] = $this->title;
     font-size: 0.82rem;
     font-weight: 500;
 }
+.fila-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-right: 10px;
+    flex-shrink: 0;
+}
+.fila-avatar-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #dfe6e9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 10px;
+    flex-shrink: 0;
+    color: #636e72;
+    font-size: 1rem;
+}
 .fila-empty {
     text-align: center;
     padding: 60px 20px;
@@ -177,8 +198,13 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<div class="card fila-card' + (isSelected ? ' selected' : '') + '" data-conv-id="' + c.id + '">';
             html += '<div class="card-body d-flex align-items-center justify-content-between">';
             html += '<input type="checkbox" class="fila-check conv-check" value="' + c.id + '"' + (isSelected ? ' checked' : '') + '>';
+            if (c.profile_picture_url) {
+                html += '<img src="' + escapeHtml(c.profile_picture_url) + '" class="fila-avatar" onerror="this.outerHTML=\'<div class=fila-avatar-placeholder><i class=fas\\ fa-user></i></div>\'">';
+            } else {
+                html += '<div class="fila-avatar-placeholder"><i class="fas fa-user"></i></div>';
+            }
             html += '<div style="flex:1; min-width: 0;">';
-            html += '<div class="fila-cliente"><i class="fas fa-user text-muted"></i> ' + escapeHtml(c.cliente_nome);
+            html += '<div class="fila-cliente">' + escapeHtml(c.cliente_nome);
             if (c.account_name) {
                 html += ' <span class="badge badge-info" style="font-size:0.65rem;"><i class="fab fa-whatsapp"></i> ' + escapeHtml(c.account_name) + '</span>';
             }

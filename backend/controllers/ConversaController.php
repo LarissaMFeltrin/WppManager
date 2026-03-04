@@ -406,6 +406,18 @@ class ConversaController extends BaseController
                 else $tempoFila = floor($diff / 3600) . 'h ' . floor(($diff % 3600) / 60) . 'min';
             }
 
+            // Buscar foto de perfil do contato
+            $profilePic = null;
+            if ($conv->chat && $conv->chat->chat_id) {
+                $contact = \common\models\Contact::find()
+                    ->where(['jid' => $conv->chat->chat_id])
+                    ->andWhere(['not', ['profile_picture_url' => null]])
+                    ->one();
+                if ($contact) {
+                    $profilePic = $contact->profile_picture_url;
+                }
+            }
+
             $data[] = [
                 'id' => $conv->id,
                 'cliente_nome' => $conv->cliente_nome ?: 'Cliente',
@@ -415,6 +427,7 @@ class ConversaController extends BaseController
                 'preview' => $preview,
                 'tempo_fila' => $tempoFila,
                 'account_name' => $conv->whatsappAccount ? $conv->whatsappAccount->session_name : null,
+                'profile_picture_url' => $profilePic,
             ];
         }
 
@@ -466,6 +479,18 @@ class ConversaController extends BaseController
             ['conversa_id' => $conversa->id, 'atendente_id' => $atendente->id]
         );
 
+        // Foto de perfil
+        $profilePic = null;
+        if ($conversa->chat && $conversa->chat->chat_id) {
+            $contact = \common\models\Contact::find()
+                ->where(['jid' => $conversa->chat->chat_id])
+                ->andWhere(['not', ['profile_picture_url' => null]])
+                ->one();
+            if ($contact) {
+                $profilePic = $contact->profile_picture_url;
+            }
+        }
+
         return [
             'success' => true,
             'conversa_id' => $conversa->id,
@@ -473,6 +498,7 @@ class ConversaController extends BaseController
             'chat_jid' => $conversa->chat ? $conversa->chat->chat_id : null,
             'cliente_nome' => $conversa->cliente_nome ?: 'Cliente',
             'cliente_numero' => $conversa->cliente_numero,
+            'profile_picture_url' => $profilePic,
         ];
     }
 
@@ -581,6 +607,16 @@ class ConversaController extends BaseController
 
         $data = [];
         foreach ($conversas as $conv) {
+            $profilePic = null;
+            if ($conv->chat && $conv->chat->chat_id) {
+                $contact = \common\models\Contact::find()
+                    ->where(['jid' => $conv->chat->chat_id])
+                    ->andWhere(['not', ['profile_picture_url' => null]])
+                    ->one();
+                if ($contact) {
+                    $profilePic = $contact->profile_picture_url;
+                }
+            }
             $data[] = [
                 'conversa_id' => $conv->id,
                 'chat_id' => $conv->chat_id,
@@ -588,6 +624,7 @@ class ConversaController extends BaseController
                 'cliente_nome' => $conv->cliente_nome ?: 'Cliente',
                 'cliente_numero' => $conv->cliente_numero,
                 'status' => $conv->status,
+                'profile_picture_url' => $profilePic,
             ];
         }
 

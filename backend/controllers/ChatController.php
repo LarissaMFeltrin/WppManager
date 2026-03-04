@@ -278,6 +278,18 @@ class ChatController extends BaseController
                 }
             }
 
+            // Foto de perfil
+            $profilePic = null;
+            if ($chat->chat_type !== 'group') {
+                $contact = \common\models\Contact::find()
+                    ->where(['jid' => $chat->chat_id])
+                    ->andWhere(['not', ['profile_picture_url' => null]])
+                    ->one();
+                if ($contact) {
+                    $profilePic = $contact->profile_picture_url;
+                }
+            }
+
             $data[] = [
                 'id' => $chat->id,
                 'chat_name' => $chat->chat_name ?: $chat->chat_id,
@@ -288,6 +300,7 @@ class ChatController extends BaseController
                 'last_time' => $chat->last_message_timestamp ? date('H:i', $chat->last_message_timestamp) : '',
                 'last_msg_text' => $lastMsgText,
                 'last_msg_from_me' => $lastMsgFromMe,
+                'profile_picture_url' => $profilePic,
             ];
         }
 
