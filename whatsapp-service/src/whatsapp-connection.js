@@ -33,6 +33,7 @@ const recentlyFinalizedChats = new Map(); // chatJid -> timestamp
 // Eventos de unread recebidos durante sync (antes de syncComplete) para processar depois
 let pendingUnreadEvents = []; // [{id: chatJid, unreadCount: N}]
 let ownLid = null;           // LID (Linked Identity) da conta, para detectar msgs do WhatsApp Web
+let currentSaveCreds = null; // Referência à função saveCreds para graceful shutdown
 
 // Limpar credenciais parciais para evitar login corrompido
 function cleanAuthDir() {
@@ -47,6 +48,40 @@ function cleanAuthDir() {
         }
     } catch (err) {
         logger.error(`Erro ao limpar auth dir: ${err.message}`);
+    }
+}
+
+// Limpar sessões corrompidas no startup (arquivos vazios ou com JSON inválido)
+// Sessões corrompidas são a causa principal de PreKeyError
+function cleanCorruptedSessions() {
+    try {
+        const dir = path.resolve(AUTH_DIR);
+        if (!fs.existsSync(dir)) return;
+        let cleaned = 0;
+        const files = fs.readdirSync(dir);
+        for (const file of files) {
+            if (!file.startsWith('session-') && !file.startsWith('sender-key-')) continue;
+            const filePath = path.join(dir, file);
+            const stat = fs.statSync(filePath);
+            // Arquivo vazio ou muito pequeno = corrompido
+            if (stat.size < 10) {
+                fs.unlinkSync(filePath);
+                cleaned++;
+                continue;
+            }
+            // Verificar se o JSON é válido
+            try {
+                JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            } catch (e) {
+                fs.unlinkSync(filePath);
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) {
+            logger.info(`[auth] ${cleaned} sessão(ões) corrompida(s) removida(s) no startup.`);
+        }
+    } catch (err) {
+        logger.error(`[auth] Erro ao limpar sessões: ${err.message}`);
     }
 }
 
@@ -252,6 +287,9 @@ async function startConnection() {
     pairingCodeRequested = false;
     logger.info(`Iniciando conexao WhatsApp para account_id=${ACCOUNT_ID}...`);
 
+    // Limpar sessões corrompidas antes de conectar
+    cleanCorruptedSessions();
+
     // Buscar versão mais recente do WhatsApp Web para evitar erro 405
     let waVersion;
     try {
@@ -264,6 +302,7 @@ async function startConnection() {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    currentSaveCreds = saveCreds; // Guardar ref para graceful shutdown
 
     // Se tem número de telefone e não tem credenciais, usar pairing code
     const isNewLogin = !state.creds.registered;
@@ -323,6 +362,23 @@ async function startConnection() {
 
     // Salvar credenciais quando atualizadas
     sock.ev.on('creds.update', saveCreds);
+
+    // Salvamento periódico do auth state a cada 5 min (proteção contra crash)
+    // Se o processo morrer abruptamente, no máximo 5 min de estado são perdidos
+    // Também monitora pre-keys disponíveis
+    setInterval(async () => {
+        try {
+            await saveCreds();
+            // Monitorar pre-keys: verificar quantas restam em disco
+            const authDir = path.resolve(AUTH_DIR);
+            const preKeyFiles = fs.readdirSync(authDir).filter(f => f.startsWith('pre-key-'));
+            if (preKeyFiles.length < 10) {
+                logger.warn(`[auth] ALERTA: Apenas ${preKeyFiles.length} pre-keys restantes! Risco de falha de decriptação.`);
+            }
+        } catch (err) {
+            logger.error(`[auth] Erro no salvamento periódico: ${err.message}`);
+        }
+    }, 300000); // 5 minutos
 
     // Status da conexão
     sock.ev.on('connection.update', async (update) => {
@@ -1048,6 +1104,27 @@ async function syncRecentMessages(jid, count = 50) {
         throw err;
     }
 }
+
+// Graceful shutdown: salvar auth state antes do processo morrer
+// PM2 envia SIGINT, depois SIGTERM. Sem isso, escritas pendentes se perdem
+// e o auth_info fica corrompido, gerando PreKeyError no próximo start.
+async function gracefulShutdown(signal) {
+    logger.info(`[shutdown] Recebido ${signal}, salvando estado...`);
+    try {
+        if (currentSaveCreds) {
+            await currentSaveCreds();
+            logger.info('[shutdown] Auth state salvo com sucesso.');
+        }
+        if (sock) {
+            sock.end(undefined);
+        }
+    } catch (err) {
+        logger.error(`[shutdown] Erro ao salvar: ${err.message}`);
+    }
+    process.exit(0);
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 module.exports = {
     startConnection,
