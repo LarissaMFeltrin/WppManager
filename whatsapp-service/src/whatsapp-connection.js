@@ -462,16 +462,17 @@ async function startConnection() {
                     pendingUnreadEvents = [];
                 }
 
-                // Backup: verificar chats não lidos no DB sem conversa ativa
-                // unread_count = -1: marcado manualmente como não lido
-                // unread_count >= 1: tem N msgs não lidas (evento pode ter sido perdido no restart/cooldown)
+                // Backup: verificar chats marcados como "não lido" no WhatsApp sem conversa ativa
+                // Apenas unread_count = -1 (marcado manualmente), NÃO unread_count >= 1
+                // pois o unread_count pode estar defasado no DB após restart
+                // Chats com msgs não lidas reais são cobertos pelos pendingUnreadEvents acima
                 try {
                     const pool = db.getPool();
                     const [markedChats] = await pool.execute(
                         `SELECT c.id, c.chat_id, c.chat_name, c.chat_type, c.unread_count
                          FROM chats c
                          LEFT JOIN conversas cv ON cv.chat_id = c.id AND cv.status IN ('aguardando', 'em_atendimento')
-                         WHERE c.account_id = ? AND (c.unread_count = -1 OR c.unread_count >= 1) AND cv.id IS NULL
+                         WHERE c.account_id = ? AND c.unread_count = -1 AND cv.id IS NULL
                            AND c.chat_id NOT LIKE '%@newsletter' AND c.chat_id NOT LIKE '%@lid'
                            AND c.chat_id != 'status@broadcast'`,
                         [ACCOUNT_ID]
@@ -542,13 +543,14 @@ async function startConnection() {
                         logger.info(`[reconciliacao] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
                     }
 
-                    // 2) Reabrir chats não lidos no DB que não têm conversa ativa
-                    // Cobre: cooldown que bloqueou reopen, eventos perdidos entre restarts
+                    // 2) Reabrir chats marcados como "não lido" no WhatsApp (unread_count = -1)
+                    // Nota: NÃO usar unread_count >= 1 aqui pois pode estar defasado no DB
+                    // O unread_count >= 1 só é verificado no check pós-sync (único, após conectar)
                     const [unreadNoConv] = await pool.execute(
                         `SELECT c.id, c.chat_id, c.chat_name, c.unread_count
                          FROM chats c
                          LEFT JOIN conversas cv ON cv.chat_id = c.id AND cv.status IN ('aguardando', 'em_atendimento')
-                         WHERE c.account_id = ? AND (c.unread_count = -1 OR c.unread_count >= 1) AND cv.id IS NULL
+                         WHERE c.account_id = ? AND c.unread_count = -1 AND cv.id IS NULL
                            AND c.chat_id NOT LIKE '%@newsletter' AND c.chat_id NOT LIKE '%@lid'
                            AND c.chat_id != 'status@broadcast'`,
                         [ACCOUNT_ID]
