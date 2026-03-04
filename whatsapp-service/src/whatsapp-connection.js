@@ -35,6 +35,22 @@ let pendingUnreadEvents = []; // [{id: chatJid, unreadCount: N}]
 let ownLid = null;           // LID (Linked Identity) da conta, para detectar msgs do WhatsApp Web
 let currentSaveCreds = null; // Referência à função saveCreds para graceful shutdown
 
+// === Rastreamento de mensagens enviadas pelo nosso sistema ===
+// Permite distinguir msgs do nosso Baileys vs auto-respostas do WhatsApp Business
+const sentBySystem = new Set(); // key.id de msgs enviadas via sock.sendMessage
+
+function trackSentMessage(result) {
+    if (result?.key?.id) {
+        sentBySystem.add(result.key.id);
+        setTimeout(() => sentBySystem.delete(result.key.id), 120000); // limpar após 2min
+    }
+    return result;
+}
+
+function isSentBySystem(keyId) {
+    return sentBySystem.has(keyId);
+}
+
 // === History loading state ===
 const historyLoadState = new Map(); // jid -> { status: 'loading'|'done'|'error', iteration, oldestTs }
 const historyLoadQueue = [];        // { jid, untilTimestamp }
@@ -495,36 +511,41 @@ async function startConnection() {
 
                 // Finalizar conversas aguardando onde a ultima msg é fromMe (já respondemos)
                 // MAS respeitar chats marcados como não lidos (unread_count >= 1 ou -1)
-                try {
-                    const pool = db.getPool();
-                    const [staleConversas] = await pool.execute(
-                        `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
-                         FROM conversas cv
-                         INNER JOIN chats ch ON ch.id = cv.chat_id
-                         INNER JOIN messages m ON m.chat_id = ch.id
-                           AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
-                         WHERE cv.status = 'aguardando'
-                           AND ch.account_id = ?
-                           AND m.is_from_me = 1
-                           AND ch.unread_count = 0`,
-                        [ACCOUNT_ID]
-                    );
-                    if (staleConversas.length > 0) {
-                        logger.info(`[pos-sync] ${staleConversas.length} conversa(s) aguardando com ultima msg fromMe...`);
-                        for (const cv of staleConversas) {
-                            await db.finalizarConversaLida(cv.chat_db_id);
-                            recentlyFinalizedChats.set(cv.chat_jid, Date.now());
-                            logger.info(`[pos-sync] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
+                // Adiar para connectionStableAt para evitar falsos positivos do sync inicial
+                const delayFinalizar = Math.max(0, connectionStableAt - Date.now());
+                setTimeout(async () => {
+                    try {
+                        const pool2 = db.getPool();
+                        const [staleConversas] = await pool2.execute(
+                            `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
+                             FROM conversas cv
+                             INNER JOIN chats ch ON ch.id = cv.chat_id
+                             INNER JOIN messages m ON m.chat_id = ch.id
+                               AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
+                             WHERE cv.status = 'aguardando'
+                               AND ch.account_id = ?
+                               AND m.is_from_me = 1
+                               AND ch.unread_count = 0`,
+                            [ACCOUNT_ID]
+                        );
+                        if (staleConversas.length > 0) {
+                            logger.info(`[pos-sync] ${staleConversas.length} conversa(s) aguardando com ultima msg fromMe...`);
+                            for (const cv of staleConversas) {
+                                await db.finalizarConversaLida(cv.chat_db_id);
+                                recentlyFinalizedChats.set(cv.chat_jid, Date.now());
+                                logger.info(`[pos-sync] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
+                            }
                         }
+                    } catch (err) {
+                        logger.error(`[pos-sync] Erro finalizar fromMe: ${err.message}`);
                     }
-                } catch (err) {
-                    logger.error(`[pos-sync] Erro finalizar fromMe: ${err.message}`);
-                }
+                }, delayFinalizar);
             }, 30000);
 
             // Reconciliação periódica: a cada 2 min
             setInterval(async () => {
                 if (!syncComplete || !sock) return;
+                if (Date.now() < connectionStableAt) return; // Esperar conexão estabilizar
                 try {
                     const pool = db.getPool();
 
@@ -693,7 +714,10 @@ async function startConnection() {
                 try {
                     if (chat.id.endsWith('@lid')) continue;
                     const chatType = getChatType(chat.id);
-                    await db.upsertChat(ACCOUNT_ID, chat.id, chat.name || chat.subject || null, chatType, chat.unreadCount || 0);
+                    // Só atualizar unread se indica não lido (>0 ou -1). Nunca zerar via history sync
+                    // pois pode sobrescrever o estado real. Zerar só via chats.update (evento real-time).
+                    const syncUnread = (chat.unreadCount > 0 || chat.unreadCount === -1) ? chat.unreadCount : null;
+                    await db.upsertChat(ACCOUNT_ID, chat.id, chat.name || chat.subject || null, chatType, syncUnread);
                 } catch (err) { /* ignore */ }
             }
         }
@@ -778,11 +802,18 @@ async function startConnection() {
                     await db.upsertConversa(chatDbId, ACCOUNT_ID, clienteNumero, clienteNome);
                 }
 
-                // Quando NÓS respondemos (via WhatsApp Web/celular), finalizar conversa aguardando.
+                // Quando NÓS respondemos, finalizar conversa aguardando.
+                // Distinguir: msg do nosso sistema (panel) ou WhatsApp Web (LID) = humano → finalizar
+                // msg fromMe mas não rastreada = possível auto-resposta WhatsApp Business → ignorar
                 if (fromMe && syncComplete) {
-                    await db.finalizarConversaLida(chatDbId);
-                    // Cooldown: impedir que chats.update reabra imediatamente (especialmente em grupos)
-                    recentlyFinalizedChats.set(chatJid, Date.now());
+                    const iFromOurSystem = isSentBySystem(msg.key.id);
+                    const isFromWhatsAppWeb = !msg.key.fromMe && isOwnMessage(msg); // LID em grupos
+                    if (iFromOurSystem || isFromWhatsAppWeb) {
+                        await db.finalizarConversaLida(chatDbId);
+                        recentlyFinalizedChats.set(chatJid, Date.now());
+                    } else {
+                        logger.info(`→ [${chatJid}] fromMe ignorado para finalizacao (possivel auto-resposta WA Business)`);
+                    }
                 }
 
                 const { type: msgType, text } = parseMessage(msg);
@@ -1023,6 +1054,7 @@ async function sendMediaMessage(jid, filePath, caption, mediaType) {
     }
 
     const result = await sock.sendMessage(jid, msgContent);
+    trackSentMessage(result);
     return result;
 }
 
@@ -1036,6 +1068,7 @@ async function sendTextMessage(jid, text, options = {}) {
         jid = jid + '@s.whatsapp.net';
     }
     const result = await sock.sendMessage(jid, { text }, options);
+    trackSentMessage(result);
     return result;
 }
 
@@ -1362,4 +1395,6 @@ module.exports = {
     fetchProfilePicUrl,
     enqueueHistoryLoad,
     getHistoryLoadStatus,
+    trackSentMessage,
+    isSentBySystem,
 };

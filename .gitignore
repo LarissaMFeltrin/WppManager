@@ -67,3 +67,5 @@ phpunit.phar
 
 # Claude Code
 .claude
+
+/whatsapp-service/auth_info_backup_*

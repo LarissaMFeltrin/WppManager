@@ -312,12 +312,14 @@ app.post('/api/forward-message', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Mensagem sem conteúdo para encaminhar.' });
             }
             result = await sock.sendMessage(normalizedTo, { text: origMsg.message_text });
+            wa.trackSentMessage(result);
         } else {
             // Encaminhar mídia - ler arquivo do disco e reenviar
             const mediaPath = path.resolve(__dirname, '../../backend/web' + origMsg.media_url);
             if (!fs.existsSync(mediaPath)) {
                 if (origMsg.message_text) {
                     result = await sock.sendMessage(normalizedTo, { text: origMsg.message_text });
+                    wa.trackSentMessage(result);
                 } else {
                     return res.status(400).json({ success: false, error: 'Arquivo de mídia não encontrado.' });
                 }
@@ -341,6 +343,7 @@ app.post('/api/forward-message', async (req, res) => {
                 }
 
                 result = await sock.sendMessage(normalizedTo, content);
+                wa.trackSentMessage(result);
             }
         }
 
