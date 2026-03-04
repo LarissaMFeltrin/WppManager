@@ -312,12 +312,14 @@ app.post('/api/forward-message', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Mensagem sem conteúdo para encaminhar.' });
             }
             result = await sock.sendMessage(normalizedTo, { text: origMsg.message_text });
+            wa.trackSentMessage(result);
         } else {
             // Encaminhar mídia - ler arquivo do disco e reenviar
             const mediaPath = path.resolve(__dirname, '../../backend/web' + origMsg.media_url);
             if (!fs.existsSync(mediaPath)) {
                 if (origMsg.message_text) {
                     result = await sock.sendMessage(normalizedTo, { text: origMsg.message_text });
+                    wa.trackSentMessage(result);
                 } else {
                     return res.status(400).json({ success: false, error: 'Arquivo de mídia não encontrado.' });
                 }
@@ -341,6 +343,7 @@ app.post('/api/forward-message', async (req, res) => {
                 }
 
                 result = await sock.sendMessage(normalizedTo, content);
+                wa.trackSentMessage(result);
             }
         }
 
@@ -462,6 +465,36 @@ app.post('/api/sync-recent/:jid', async (req, res) => {
         const count = Math.min(parseInt(req.query.count) || 50, 200);
         const result = await wa.syncRecentMessages(jid, count);
         res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Carregar historico de mensagens ate uma data alvo (background, fire-and-forget)
+app.post('/api/load-history/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) {
+            jid = jid + '@s.whatsapp.net';
+        }
+        // Default: 01/01/2026 00:00:00 UTC
+        const untilTimestamp = parseInt(req.query.until) || Math.floor(new Date('2026-01-01T00:00:00Z').getTime() / 1000);
+        const result = wa.enqueueHistoryLoad(jid, untilTimestamp);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Status do carregamento de historico de um chat
+app.get('/api/load-history-status/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) {
+            jid = jid + '@s.whatsapp.net';
+        }
+        const status = wa.getHistoryLoadStatus(jid);
+        res.json({ success: true, ...status });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

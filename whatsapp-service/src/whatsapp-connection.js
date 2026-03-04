@@ -35,6 +35,27 @@ let pendingUnreadEvents = []; // [{id: chatJid, unreadCount: N}]
 let ownLid = null;           // LID (Linked Identity) da conta, para detectar msgs do WhatsApp Web
 let currentSaveCreds = null; // Referência à função saveCreds para graceful shutdown
 
+// === Rastreamento de mensagens enviadas pelo nosso sistema ===
+// Permite distinguir msgs do nosso Baileys vs auto-respostas do WhatsApp Business
+const sentBySystem = new Set(); // key.id de msgs enviadas via sock.sendMessage
+
+function trackSentMessage(result) {
+    if (result?.key?.id) {
+        sentBySystem.add(result.key.id);
+        setTimeout(() => sentBySystem.delete(result.key.id), 120000); // limpar após 2min
+    }
+    return result;
+}
+
+function isSentBySystem(keyId) {
+    return sentBySystem.has(keyId);
+}
+
+// === History loading state ===
+const historyLoadState = new Map(); // jid -> { status: 'loading'|'done'|'error', iteration, oldestTs }
+const historyLoadQueue = [];        // { jid, untilTimestamp }
+let historyLoadProcessing = false;
+
 // Limpar credenciais parciais para evitar login corrompido
 function cleanAuthDir() {
     try {
@@ -490,36 +511,41 @@ async function startConnection() {
 
                 // Finalizar conversas aguardando onde a ultima msg é fromMe (já respondemos)
                 // MAS respeitar chats marcados como não lidos (unread_count >= 1 ou -1)
-                try {
-                    const pool = db.getPool();
-                    const [staleConversas] = await pool.execute(
-                        `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
-                         FROM conversas cv
-                         INNER JOIN chats ch ON ch.id = cv.chat_id
-                         INNER JOIN messages m ON m.chat_id = ch.id
-                           AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
-                         WHERE cv.status = 'aguardando'
-                           AND ch.account_id = ?
-                           AND m.is_from_me = 1
-                           AND ch.unread_count = 0`,
-                        [ACCOUNT_ID]
-                    );
-                    if (staleConversas.length > 0) {
-                        logger.info(`[pos-sync] ${staleConversas.length} conversa(s) aguardando com ultima msg fromMe...`);
-                        for (const cv of staleConversas) {
-                            await db.finalizarConversaLida(cv.chat_db_id);
-                            recentlyFinalizedChats.set(cv.chat_jid, Date.now());
-                            logger.info(`[pos-sync] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
+                // Adiar para connectionStableAt para evitar falsos positivos do sync inicial
+                const delayFinalizar = Math.max(0, connectionStableAt - Date.now());
+                setTimeout(async () => {
+                    try {
+                        const pool2 = db.getPool();
+                        const [staleConversas] = await pool2.execute(
+                            `SELECT cv.id, cv.cliente_nome, ch.id as chat_db_id, ch.chat_id as chat_jid
+                             FROM conversas cv
+                             INNER JOIN chats ch ON ch.id = cv.chat_id
+                             INNER JOIN messages m ON m.chat_id = ch.id
+                               AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.chat_id = ch.id)
+                             WHERE cv.status = 'aguardando'
+                               AND ch.account_id = ?
+                               AND m.is_from_me = 1
+                               AND ch.unread_count = 0`,
+                            [ACCOUNT_ID]
+                        );
+                        if (staleConversas.length > 0) {
+                            logger.info(`[pos-sync] ${staleConversas.length} conversa(s) aguardando com ultima msg fromMe...`);
+                            for (const cv of staleConversas) {
+                                await db.finalizarConversaLida(cv.chat_db_id);
+                                recentlyFinalizedChats.set(cv.chat_jid, Date.now());
+                                logger.info(`[pos-sync] Conversa #${cv.id} (${cv.cliente_nome}) finalizada - ultima msg é fromMe`);
+                            }
                         }
+                    } catch (err) {
+                        logger.error(`[pos-sync] Erro finalizar fromMe: ${err.message}`);
                     }
-                } catch (err) {
-                    logger.error(`[pos-sync] Erro finalizar fromMe: ${err.message}`);
-                }
+                }, delayFinalizar);
             }, 30000);
 
             // Reconciliação periódica: a cada 2 min
             setInterval(async () => {
                 if (!syncComplete || !sock) return;
+                if (Date.now() < connectionStableAt) return; // Esperar conexão estabilizar
                 try {
                     const pool = db.getPool();
 
@@ -688,7 +714,10 @@ async function startConnection() {
                 try {
                     if (chat.id.endsWith('@lid')) continue;
                     const chatType = getChatType(chat.id);
-                    await db.upsertChat(ACCOUNT_ID, chat.id, chat.name || chat.subject || null, chatType, chat.unreadCount || 0);
+                    // Só atualizar unread se indica não lido (>0 ou -1). Nunca zerar via history sync
+                    // pois pode sobrescrever o estado real. Zerar só via chats.update (evento real-time).
+                    const syncUnread = (chat.unreadCount > 0 || chat.unreadCount === -1) ? chat.unreadCount : null;
+                    await db.upsertChat(ACCOUNT_ID, chat.id, chat.name || chat.subject || null, chatType, syncUnread);
                 } catch (err) { /* ignore */ }
             }
         }
@@ -773,11 +802,18 @@ async function startConnection() {
                     await db.upsertConversa(chatDbId, ACCOUNT_ID, clienteNumero, clienteNome);
                 }
 
-                // Quando NÓS respondemos (via WhatsApp Web/celular), finalizar conversa aguardando.
+                // Quando NÓS respondemos, finalizar conversa aguardando.
+                // Distinguir: msg do nosso sistema (panel) ou WhatsApp Web (LID) = humano → finalizar
+                // msg fromMe mas não rastreada = possível auto-resposta WhatsApp Business → ignorar
                 if (fromMe && syncComplete) {
-                    await db.finalizarConversaLida(chatDbId);
-                    // Cooldown: impedir que chats.update reabra imediatamente (especialmente em grupos)
-                    recentlyFinalizedChats.set(chatJid, Date.now());
+                    const iFromOurSystem = isSentBySystem(msg.key.id);
+                    const isFromWhatsAppWeb = !msg.key.fromMe && isOwnMessage(msg); // LID em grupos
+                    if (iFromOurSystem || isFromWhatsAppWeb) {
+                        await db.finalizarConversaLida(chatDbId);
+                        recentlyFinalizedChats.set(chatJid, Date.now());
+                    } else {
+                        logger.info(`→ [${chatJid}] fromMe ignorado para finalizacao (possivel auto-resposta WA Business)`);
+                    }
                 }
 
                 const { type: msgType, text } = parseMessage(msg);
@@ -1018,6 +1054,7 @@ async function sendMediaMessage(jid, filePath, caption, mediaType) {
     }
 
     const result = await sock.sendMessage(jid, msgContent);
+    trackSentMessage(result);
     return result;
 }
 
@@ -1031,6 +1068,7 @@ async function sendTextMessage(jid, text, options = {}) {
         jid = jid + '@s.whatsapp.net';
     }
     const result = await sock.sendMessage(jid, { text }, options);
+    trackSentMessage(result);
     return result;
 }
 
@@ -1132,6 +1170,192 @@ async function syncRecentMessages(jid, count = 50) {
     }
 }
 
+// === Carregamento automático de histórico de mensagens ===
+
+// Obter timestamp da mensagem mais antiga de um chat no banco
+async function getOldestMessageTimestamp(jid) {
+    const dbPool = db.getPool();
+    const [chatRows] = await dbPool.execute(
+        'SELECT id FROM chats WHERE account_id = ? AND chat_id = ?',
+        [ACCOUNT_ID, jid]
+    );
+    if (chatRows.length === 0) return null;
+    const [msgRows] = await dbPool.execute(
+        'SELECT MIN(timestamp) as oldest_ts FROM messages WHERE chat_id = ? AND timestamp > 0',
+        [chatRows[0].id]
+    );
+    return msgRows[0]?.oldest_ts || null;
+}
+
+// Contar mensagens de um chat no banco (para detectar quando batch foi processado)
+async function getMessageCount(jid) {
+    const dbPool = db.getPool();
+    const [chatRows] = await dbPool.execute(
+        'SELECT id FROM chats WHERE account_id = ? AND chat_id = ?',
+        [ACCOUNT_ID, jid]
+    );
+    if (chatRows.length === 0) return 0;
+    const [countRows] = await dbPool.execute(
+        'SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ?',
+        [chatRows[0].id]
+    );
+    return countRows[0].cnt;
+}
+
+// Carregar histórico de mensagens até uma data alvo (loop com batches de 50)
+async function loadHistoryUntil(jid, untilTimestamp) {
+    const MAX_ITERATIONS = 30;
+    const BATCH_SIZE = 50;
+    const DELAY_BETWEEN_BATCHES_MS = 5000;
+    const WAIT_FOR_MESSAGES_MS = 8000;
+    const POLL_INTERVAL_MS = 500;
+
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+
+    // Verificar se já está carregando
+    const existing = historyLoadState.get(jid);
+    if (existing && existing.status === 'loading') {
+        return { status: 'already_loading', iteration: existing.iteration };
+    }
+
+    // Se já carregou, verificar se ainda precisa
+    if (existing && existing.status === 'done') {
+        const currentOldest = await getOldestMessageTimestamp(jid);
+        if (currentOldest && currentOldest <= untilTimestamp) {
+            return { status: 'already_done', oldestTimestamp: currentOldest };
+        }
+    }
+
+    if (!sock || connectionStatus !== 'connected') {
+        return { status: 'error', error: 'WhatsApp nao conectado' };
+    }
+
+    // Verificar se já atingiu o target
+    const initialOldest = await getOldestMessageTimestamp(jid);
+    if (initialOldest && initialOldest <= untilTimestamp) {
+        historyLoadState.set(jid, { status: 'done', iteration: 0, oldestTs: initialOldest });
+        logger.info(`[loadHistory] ${jid} ja tem msgs desde ${new Date(initialOldest * 1000).toISOString()}`);
+        return { status: 'already_at_target', oldestTimestamp: initialOldest };
+    }
+
+    historyLoadState.set(jid, { status: 'loading', iteration: 0, oldestTs: initialOldest });
+    logger.info(`[loadHistory] Iniciando carga de historico de ${jid} ate ${new Date(untilTimestamp * 1000).toISOString()}`);
+
+    try {
+        for (let i = 0; i < MAX_ITERATIONS; i++) {
+            historyLoadState.set(jid, {
+                status: 'loading', iteration: i + 1,
+                oldestTs: await getOldestMessageTimestamp(jid)
+            });
+
+            if (!sock || connectionStatus !== 'connected') {
+                historyLoadState.set(jid, { status: 'error', iteration: i + 1, oldestTs: null });
+                logger.warn(`[loadHistory] ${jid} abortado - desconectado na iteracao ${i + 1}`);
+                return { status: 'error', error: 'Desconectado', iterations: i + 1 };
+            }
+
+            const countBefore = await getMessageCount(jid);
+
+            logger.info(`[loadHistory] ${jid} iteracao ${i + 1}/${MAX_ITERATIONS} - solicitando ${BATCH_SIZE} msgs...`);
+            try {
+                await fetchChatMessages(jid, BATCH_SIZE);
+            } catch (err) {
+                logger.error(`[loadHistory] ${jid} fetchChatMessages erro: ${err.message}`);
+                await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+                continue;
+            }
+
+            // Esperar messaging-history.set processar (poll DB a cada 500ms, max 8s)
+            let newMessagesArrived = false;
+            const waitStart = Date.now();
+            while (Date.now() - waitStart < WAIT_FOR_MESSAGES_MS) {
+                await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+                const countAfter = await getMessageCount(jid);
+                if (countAfter > countBefore) {
+                    newMessagesArrived = true;
+                    break;
+                }
+            }
+
+            if (!newMessagesArrived) {
+                const finalOldest = await getOldestMessageTimestamp(jid);
+                historyLoadState.set(jid, { status: 'done', iteration: i + 1, oldestTs: finalOldest });
+                logger.info(`[loadHistory] ${jid} concluido - sem mais msgs na iteracao ${i + 1}. Oldest: ${finalOldest ? new Date(finalOldest * 1000).toISOString() : 'nenhuma'}`);
+                return { status: 'done_no_more', iterations: i + 1, oldestTimestamp: finalOldest };
+            }
+
+            const currentOldest = await getOldestMessageTimestamp(jid);
+            if (currentOldest && currentOldest <= untilTimestamp) {
+                historyLoadState.set(jid, { status: 'done', iteration: i + 1, oldestTs: currentOldest });
+                logger.info(`[loadHistory] ${jid} target atingido na iteracao ${i + 1}! Oldest: ${new Date(currentOldest * 1000).toISOString()}`);
+                return { status: 'done_target_reached', iterations: i + 1, oldestTimestamp: currentOldest };
+            }
+
+            // Rate limit entre batches
+            if (i < MAX_ITERATIONS - 1) {
+                await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+            }
+        }
+
+        const finalOldest = await getOldestMessageTimestamp(jid);
+        historyLoadState.set(jid, { status: 'done', iteration: MAX_ITERATIONS, oldestTs: finalOldest });
+        logger.info(`[loadHistory] ${jid} max iteracoes (${MAX_ITERATIONS}) atingido. Oldest: ${finalOldest ? new Date(finalOldest * 1000).toISOString() : 'nenhuma'}`);
+        return { status: 'done_max_iterations', iterations: MAX_ITERATIONS, oldestTimestamp: finalOldest };
+
+    } catch (err) {
+        historyLoadState.set(jid, { status: 'error', iteration: 0, oldestTs: null });
+        logger.error(`[loadHistory] ${jid} erro fatal: ${err.message}`);
+        return { status: 'error', error: err.message };
+    }
+}
+
+// Processar fila de carregamento de histórico (um JID por vez)
+async function processHistoryQueue() {
+    if (historyLoadProcessing) return;
+    historyLoadProcessing = true;
+
+    while (historyLoadQueue.length > 0) {
+        const { jid, untilTimestamp } = historyLoadQueue.shift();
+        try {
+            await loadHistoryUntil(jid, untilTimestamp);
+        } catch (err) {
+            logger.error(`[historyQueue] Erro ao processar ${jid}: ${err.message}`);
+        }
+    }
+
+    historyLoadProcessing = false;
+}
+
+// Enfileirar carregamento de histórico (fire-and-forget)
+function enqueueHistoryLoad(jid, untilTimestamp) {
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+
+    const existing = historyLoadState.get(jid);
+    if (existing && (existing.status === 'loading' || existing.status === 'done')) {
+        return { queued: false, reason: existing.status };
+    }
+
+    if (historyLoadQueue.some(item => item.jid === jid)) {
+        return { queued: false, reason: 'already_queued' };
+    }
+
+    historyLoadQueue.push({ jid, untilTimestamp });
+    logger.info(`[historyQueue] Enfileirado ${jid} (fila: ${historyLoadQueue.length})`);
+
+    processHistoryQueue();
+
+    return { queued: true, queueSize: historyLoadQueue.length };
+}
+
+// Status do carregamento de histórico de um JID
+function getHistoryLoadStatus(jid) {
+    if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+    const state = historyLoadState.get(jid);
+    if (!state) return { status: 'not_started' };
+    const inQueue = historyLoadQueue.some(item => item.jid === jid);
+    return { ...state, inQueue };
+}
+
 // Graceful shutdown: salvar auth state antes do processo morrer
 // PM2 envia SIGINT, depois SIGTERM. Sem isso, escritas pendentes se perdem
 // e o auth_info fica corrompido, gerando PreKeyError no próximo start.
@@ -1169,4 +1393,8 @@ module.exports = {
     fetchChatMessages,
     syncRecentMessages,
     fetchProfilePicUrl,
+    enqueueHistoryLoad,
+    getHistoryLoadStatus,
+    trackSentMessage,
+    isSentBySystem,
 };
