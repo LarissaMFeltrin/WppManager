@@ -452,6 +452,21 @@ app.post('/api/sync-chat/:jid', async (req, res) => {
     }
 });
 
+// Sync de mensagens recentes (para recuperar msgs perdidas por falhas de E2EE)
+app.post('/api/sync-recent/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) {
+            jid = jid + '@s.whatsapp.net';
+        }
+        const count = Math.min(parseInt(req.query.count) || 50, 200);
+        const result = await wa.syncRecentMessages(jid, count);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // ========== START ==========
 
 async function start() {

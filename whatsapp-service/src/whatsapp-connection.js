@@ -964,9 +964,9 @@ async function fetchChatMessages(jid, count = 50) {
         if (msgRows.length > 0) {
             // Pedir ao WhatsApp mensagens anteriores à mais antiga que temos
             const oldestKey = { remoteJid: jid, id: msgRows[0].message_key };
-            const oldestTs = msgRows[0].timestamp;
-            logger.info(`[fetchChatMessages] Solicitando ${count} msgs de ${jid} antes de ${oldestKey.id} (ts=${oldestTs})`);
-            await sock.fetchMessageHistory(count, oldestKey, oldestTs);
+            const oldestTsMs = msgRows[0].timestamp * 1000; // Converter para ms
+            logger.info(`[fetchChatMessages] Solicitando ${count} msgs de ${jid} antes de ${oldestKey.id} (tsMs=${oldestTsMs})`);
+            await sock.fetchMessageHistory(count, oldestKey, oldestTsMs);
         } else {
             // Sem mensagens - pedir as mais recentes
             const oldestKey = { remoteJid: jid, id: '' };
@@ -978,6 +978,55 @@ async function fetchChatMessages(jid, count = 50) {
         return { requested: true };
     } catch (err) {
         logger.error(`[fetchChatMessages] Erro: ${err.message}`);
+        throw err;
+    }
+}
+
+// Buscar mensagens RECENTES que possam ter sido perdidas por falhas de E2EE
+// Usa a mensagem mais recente como âncora e pede N msgs antes dela
+async function syncRecentMessages(jid, count = 50) {
+    if (!sock || connectionStatus !== 'connected') {
+        throw new Error('WhatsApp não está conectado.');
+    }
+    if (!jid.includes('@')) {
+        jid = jid + '@s.whatsapp.net';
+    }
+
+    try {
+        const dbPool = db.getPool();
+        const [chatRows] = await dbPool.execute(
+            'SELECT id FROM chats WHERE account_id = ? AND chat_id = ?',
+            [ACCOUNT_ID, jid]
+        );
+        if (chatRows.length === 0) {
+            logger.info(`[syncRecent] Chat ${jid} não existe no banco`);
+            return { requested: false };
+        }
+
+        const chatDbId = chatRows[0].id;
+
+        // Pegar a mensagem MAIS RECENTE como âncora
+        const [msgRows] = await dbPool.execute(
+            'SELECT message_key, timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp DESC, id DESC LIMIT 1',
+            [chatDbId]
+        );
+
+        if (msgRows.length > 0) {
+            // Usar timestamp futuro (agora + 1 min) em ms para pegar tudo até o presente
+            const anchorKey = { remoteJid: jid, id: msgRows[0].message_key, fromMe: true };
+            const futureTsMs = Date.now() + 60000;
+            logger.info(`[syncRecent] Solicitando ${count} msgs recentes de ${jid} (âncora: tsMs=${futureTsMs})`);
+            await sock.fetchMessageHistory(count, anchorKey, futureTsMs);
+        } else {
+            // Sem mensagens, pedir as mais recentes
+            const anchorKey = { remoteJid: jid, id: '' };
+            logger.info(`[syncRecent] Solicitando ${count} msgs de ${jid} (sem histórico local)`);
+            await sock.fetchMessageHistory(count, anchorKey, Date.now());
+        }
+
+        return { requested: true };
+    } catch (err) {
+        logger.error(`[syncRecent] Erro: ${err.message}`);
         throw err;
     }
 }
@@ -996,4 +1045,5 @@ module.exports = {
     syncAllGroupNames,
     fetchGroupName,
     fetchChatMessages,
+    syncRecentMessages,
 };
