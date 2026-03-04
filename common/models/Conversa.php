@@ -26,7 +26,7 @@ class Conversa extends ActiveRecord
             [['status'], 'in', 'range' => [self::STATUS_AGUARDANDO, self::STATUS_EM_ATENDIMENTO, self::STATUS_FINALIZADA]],
             [['bloqueada'], 'boolean'],
             [['notas'], 'string'],
-            [['iniciada_em', 'atendida_em', 'finalizada_em', 'ultima_msg_em'], 'safe'],
+            [['iniciada_em', 'atendida_em', 'finalizada_em', 'ultima_msg_em', 'cliente_aguardando_desde'], 'safe'],
         ];
     }
 
@@ -45,6 +45,7 @@ class Conversa extends ActiveRecord
             'atendida_em' => 'Atendida em',
             'finalizada_em' => 'Finalizada em',
             'ultima_msg_em' => 'Última Mensagem em',
+            'cliente_aguardando_desde' => 'Cliente Aguardando Desde',
         ];
     }
 

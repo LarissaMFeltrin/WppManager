@@ -33,6 +33,11 @@ const recentlyFinalizedChats = new Map(); // chatJid -> timestamp
 // Eventos de unread recebidos durante sync (antes de syncComplete) para processar depois
 let pendingUnreadEvents = []; // [{id: chatJid, unreadCount: N}]
 let ownLid = null;           // LID (Linked Identity) da conta, para detectar msgs do WhatsApp Web
+
+// === Auto-recovery de sessões E2EE ===
+// Quando o Baileys falha ao decriptar uma msg, registra o JID aqui.
+// Um timer periódico tenta re-estabelecer as sessões com presenceSubscribe.
+const failedDecryptJids = new Map(); // jid -> { count, lastAttempt }
 let currentSaveCreds = null; // Referência à função saveCreds para graceful shutdown
 
 // === Rastreamento de mensagens enviadas pelo nosso sistema ===
@@ -160,7 +165,8 @@ async function downloadAndSaveMedia(msg, messageType) {
 
         // Determinar extensão e nome do arquivo
         const msgContent = msg.message.imageMessage || msg.message.videoMessage ||
-            msg.message.audioMessage || msg.message.documentMessage || msg.message.stickerMessage;
+            msg.message.audioMessage || msg.message.documentMessage || msg.message.stickerMessage
+            || msg.message.documentWithCaptionMessage?.message?.documentMessage;
         const mime = msgContent?.mimetype || '';
         const ext = MIME_EXTENSIONS[mime] || (mime.startsWith('image/') ? '.jpg' : mime.startsWith('audio/') ? '.ogg' : '.bin');
         const fileName = `${msg.key.id}${ext}`;
@@ -211,6 +217,10 @@ function parseMessage(msg) {
     else if (m.videoMessage) result = { type: 'video', text: m.videoMessage.caption || null, mediaMime: m.videoMessage.mimetype };
     else if (m.audioMessage) result = { type: 'audio', text: null, mediaMime: m.audioMessage.mimetype };
     else if (m.documentMessage) result = { type: 'document', text: m.documentMessage.fileName || null, mediaMime: m.documentMessage.mimetype };
+    else if (m.documentWithCaptionMessage?.message?.documentMessage) {
+        const doc = m.documentWithCaptionMessage.message.documentMessage;
+        result = { type: 'document', text: doc.caption || doc.fileName || null, mediaMime: doc.mimetype };
+    }
     else if (m.stickerMessage) result = { type: 'sticker', text: null, mediaMime: m.stickerMessage.mimetype };
     else if (m.contactMessage) result = { type: 'contact', text: m.contactMessage.displayName || null, mediaMime: null };
     else if (m.locationMessage) result = { type: 'location', text: `${m.locationMessage.degreesLatitude},${m.locationMessage.degreesLongitude}`, mediaMime: null };
@@ -228,7 +238,8 @@ function parseMessage(msg) {
     let quotedStanzaId = null;
     let quotedText = null;
     const contentWithContext = m.extendedTextMessage || m.imageMessage || m.videoMessage
-        || m.audioMessage || m.documentMessage;
+        || m.audioMessage || m.documentMessage
+        || m.documentWithCaptionMessage?.message?.documentMessage;
     if (contentWithContext?.contextInfo) {
         const ctx = contentWithContext.contextInfo;
         quotedStanzaId = ctx.stanzaId || null;
@@ -325,6 +336,75 @@ async function processMessage(msg, chatDbId, fromMe) {
     return timestamp;
 }
 
+// === Health check e reparo automático do auth state ===
+// Executa ANTES de cada conexão para prevenir perda de mensagens por E2EE
+async function repairAuthState(state, saveCreds) {
+    const authDir = path.resolve(AUTH_DIR);
+    let changed = false;
+
+    // 1. Garantir que registered = true (se false, Baileys pode se comportar como novo login)
+    if (!state.creds.registered) {
+        // Se já tem credenciais completas (me, account), é uma conexão existente
+        if (state.creds.me && state.creds.account) {
+            logger.warn('[auth-repair] creds.registered era false com credenciais existentes - corrigindo para true');
+            state.creds.registered = true;
+            changed = true;
+        }
+    }
+
+    // 2. Verificar consistência de pre-keys: local vs nextPreKeyId
+    //    Se nextPreKeyId > maior pre-key local + 1, temos pre-keys fantasma no servidor
+    const preKeyFiles = fs.readdirSync(authDir).filter(f => f.startsWith('pre-key-') && f.endsWith('.json'));
+    const localPreKeyIds = preKeyFiles.map(f => parseInt(f.replace('pre-key-', '').replace('.json', ''))).filter(n => !isNaN(n));
+    const maxLocalId = localPreKeyIds.length > 0 ? Math.max(...localPreKeyIds) : 0;
+    const nextId = state.creds.nextPreKeyId || 0;
+    const firstUnuploaded = state.creds.firstUnuploadedPreKeyId || 0;
+
+    logger.info(`[auth-repair] Pre-keys: ${localPreKeyIds.length} locais (max ID: ${maxLocalId}), nextPreKeyId: ${nextId}, firstUnuploaded: ${firstUnuploaded}`);
+
+    // Se há gap entre max local e nextPreKeyId, temos pre-keys fantasma
+    // (foram geradas/uploadadas mas as privadas foram perdidas em crash)
+    const gapSize = nextId - maxLocalId - 1;
+    if (gapSize > 3 && maxLocalId > 0) {
+        logger.warn(`[auth-repair] Gap de ${gapSize} pre-keys detectado (IDs ${maxLocalId + 1} a ${nextId - 1} perdidas)`);
+        logger.warn('[auth-repair] Forçando serverHasPreKeys=false para upload de novas pre-keys');
+        state.creds.serverHasPreKeys = false;
+        changed = true;
+    }
+
+    // 3. Se serverHasPreKeys é indefinido, forçar verificação
+    if (state.creds.serverHasPreKeys === undefined || state.creds.serverHasPreKeys === null) {
+        logger.info('[auth-repair] serverHasPreKeys indefinido - forçando verificação');
+        state.creds.serverHasPreKeys = false;
+        changed = true;
+    }
+
+    // 4. Limpar sessões corrompidas de contatos individuais
+    //    Sessões com tamanho muito pequeno (<100 bytes) provavelmente estão incompletas
+    const sessionFiles = fs.readdirSync(authDir).filter(f => f.startsWith('session-') && f.endsWith('.json'));
+    let removedSessions = 0;
+    for (const sf of sessionFiles) {
+        const fullPath = path.join(authDir, sf);
+        try {
+            const stat = fs.statSync(fullPath);
+            if (stat.size < 50) {
+                fs.unlinkSync(fullPath);
+                removedSessions++;
+                logger.warn(`[auth-repair] Sessão corrompida removida: ${sf} (${stat.size} bytes)`);
+            }
+        } catch (e) { /* ignore */ }
+    }
+    if (removedSessions > 0) {
+        logger.info(`[auth-repair] ${removedSessions} sessão(ões) corrompida(s) removida(s)`);
+    }
+
+    // Salvar se houve alterações
+    if (changed) {
+        await saveCreds();
+        logger.info('[auth-repair] Auth state reparado e salvo');
+    }
+}
+
 // Iniciar conexão com WhatsApp
 async function startConnection() {
     connectionStatus = 'connecting';
@@ -348,8 +428,38 @@ async function startConnection() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     currentSaveCreds = saveCreds; // Guardar ref para graceful shutdown
 
+    // === Health check de auth state (pre-keys e sessões) ===
+    // Previne perda de mensagens por sessões E2EE corrompidas
+    await repairAuthState(state, saveCreds);
+
     // Se tem número de telefone e não tem credenciais, usar pairing code
     const isNewLogin = !state.creds.registered;
+
+    // Logger que intercepta falhas de decrypt para auto-recovery de sessão
+    const baileysLogger = logger.child({ module: 'baileys' });
+    const originalChild = baileysLogger.child.bind(baileysLogger);
+    baileysLogger.child = function(bindings) {
+        const child = originalChild(bindings);
+        const origError = child.error.bind(child);
+        child.error = function(obj, msg) {
+            // Interceptar "failed to decrypt message" para rastrear JIDs com sessão quebrada
+            if (obj && obj.key && (msg === 'failed to decrypt message' || (typeof obj.msg === 'string' && obj.msg.includes('failed to decrypt')))) {
+                // Usar senderPn (phone number) como fallback quando remoteJid é LID
+                let jid = obj.key.remoteJid;
+                if (jid && jid.endsWith('@lid') && obj.key.senderPn) {
+                    jid = obj.key.senderPn; // ex: 554499054050@s.whatsapp.net
+                }
+                if (jid && jid.endsWith('@s.whatsapp.net')) {
+                    const existing = failedDecryptJids.get(jid) || { count: 0, lastAttempt: 0 };
+                    existing.count++;
+                    failedDecryptJids.set(jid, existing);
+                    logger.warn(`[e2ee-recovery] Falha de decrypt para ${jid} (total: ${existing.count})`);
+                }
+            }
+            return origError(obj, msg);
+        };
+        return child;
+    };
 
     sock = makeWASocket({
         version: waVersion,
@@ -359,7 +469,7 @@ async function startConnection() {
         },
         browser: Browsers.macOS('Desktop'),
         syncFullHistory: true,
-        logger: logger.child({ module: 'baileys' }),
+        logger: baileysLogger,
         generateHighQualityLinkPreview: false,
         markOnlineOnConnect: false,
         // Retry de mensagens que falharam na decriptação (Bad MAC)
@@ -448,6 +558,84 @@ async function startConnection() {
 
             // Sincronizar nomes de grupos após conexão (com delay para estabilizar)
             setTimeout(() => syncAllGroupNames(), 5000);
+
+            // Auto-subscribe presença para todos os chats individuais ativos
+            // Isso ajuda a manter sessões E2EE válidas com os contatos
+            setTimeout(async () => {
+                try {
+                    const pool = db.getPool();
+                    // Incluir TODOS os contatos individuais que já tiveram conversa
+                    // (previne perda de sessão E2EE para qualquer contato conhecido)
+                    const [allContactChats] = await pool.execute(
+                        `SELECT DISTINCT ch.chat_id
+                         FROM chats ch
+                         INNER JOIN conversas cv ON cv.chat_id = ch.id
+                         WHERE ch.account_id = ?
+                           AND ch.chat_id LIKE '%@s.whatsapp.net'`,
+                        [ACCOUNT_ID]
+                    );
+                    const jids = new Set(allContactChats.map(r => r.chat_id));
+                    if (jids.size > 0) {
+                        logger.info(`[e2ee-recovery] Subscrevendo presença de ${jids.size} contato(s) ativos...`);
+                        for (const jid of jids) {
+                            try {
+                                await sock.presenceSubscribe(jid);
+                            } catch (e) { /* ignore */ }
+                            // Pequeno delay para não sobrecarregar
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                        logger.info(`[e2ee-recovery] Presença subscrita para ${jids.size} contato(s).`);
+                    }
+                } catch (err) {
+                    logger.error(`[e2ee-recovery] Erro no subscribe inicial: ${err.message}`);
+                }
+            }, 15000); // 15s após conexão
+
+            // Timer periódico (2 min): tentar re-estabelecer sessões que falharam
+            setInterval(async () => {
+                if (!sock || connectionStatus !== 'connected') return;
+                if (failedDecryptJids.size === 0) return;
+                const now = Date.now();
+                const toRetry = [];
+                for (const [jid, info] of failedDecryptJids.entries()) {
+                    // Só tentar se passaram pelo menos 60s desde a última tentativa
+                    if (now - info.lastAttempt > 60000) {
+                        toRetry.push(jid);
+                    }
+                }
+                if (toRetry.length === 0) return;
+                logger.info(`[e2ee-recovery] Tentando re-estabelecer ${toRetry.length} sessão(ões)...`);
+                for (const jid of toRetry) {
+                    try {
+                        await sock.presenceSubscribe(jid);
+                        // Buscar última msg do contato para enviar read receipt
+                        const pool = db.getPool();
+                        const [msgs] = await pool.execute(
+                            `SELECT m.message_key FROM messages m
+                             INNER JOIN chats c ON c.id = m.chat_id
+                             WHERE c.chat_id = ? AND c.account_id = ? AND m.is_from_me = 0
+                             ORDER BY m.timestamp DESC LIMIT 1`,
+                            [jid, ACCOUNT_ID]
+                        );
+                        if (msgs.length > 0) {
+                            await sock.readMessages([{ remoteJid: jid, id: msgs[0].message_key }]);
+                        }
+                        const info = failedDecryptJids.get(jid);
+                        if (info) {
+                            info.lastAttempt = now;
+                            // Após 5 tentativas sem sucesso, desistir (evitar loop infinito)
+                            if (info.count > 5) {
+                                failedDecryptJids.delete(jid);
+                                logger.warn(`[e2ee-recovery] Desistindo de ${jid} após ${info.count} falhas`);
+                            }
+                        }
+                        logger.info(`[e2ee-recovery] Sessão re-estabelecida para ${jid}`);
+                    } catch (e) {
+                        logger.error(`[e2ee-recovery] Erro ao recuperar ${jid}: ${e.message}`);
+                    }
+                    await new Promise(r => setTimeout(r, 200));
+                }
+            }, 120000); // 2 min
 
             // Aguardar sync inicial antes de processar eventos de leitura
             setTimeout(async () => {
@@ -766,6 +954,12 @@ async function startConnection() {
                 const pushName = msg.pushName || null;
                 const fromMe = isOwnMessage(msg);
 
+                // Sessão E2EE OK: limpar do rastreamento de falhas
+                if (failedDecryptJids.has(chatJid)) {
+                    failedDecryptJids.delete(chatJid);
+                    logger.info(`[e2ee-recovery] Sessão recuperada com sucesso para ${chatJid}`);
+                }
+
                 // Para grupos, NÃO usar pushName como nome do chat (pushName é do remetente!)
                 // Para chats individuais, pushName É o nome do contato
                 let chatName = null;
@@ -800,12 +994,16 @@ async function startConnection() {
                         ? (chatName || pushName)
                         : (chatName || chatJid);
                     await db.upsertConversa(chatDbId, ACCOUNT_ID, clienteNumero, clienteNome);
+                    // Cliente enviou msg → marcar que está aguardando resposta
+                    await db.setClienteAguardando(chatDbId);
                 }
 
                 // Quando NÓS respondemos, finalizar conversa aguardando.
                 // Distinguir: msg do nosso sistema (panel) ou WhatsApp Web (LID) = humano → finalizar
                 // msg fromMe mas não rastreada = possível auto-resposta WhatsApp Business → ignorar
                 if (fromMe && syncComplete) {
+                    // Limpar timer de espera do cliente (atendente respondeu)
+                    await db.clearClienteAguardando(chatDbId);
                     const iFromOurSystem = isSentBySystem(msg.key.id);
                     const isFromWhatsAppWeb = !msg.key.fromMe && isOwnMessage(msg); // LID em grupos
                     if (iFromOurSystem || isFromWhatsAppWeb) {

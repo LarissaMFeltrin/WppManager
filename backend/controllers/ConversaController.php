@@ -21,6 +21,26 @@ use yii\web\Response;
 class ConversaController extends BaseController
 {
     /**
+     * Ao finalizar conversa, reseta unread_count e marca como lida no WhatsApp.
+     */
+    private function marcarChatComoLido(Conversa $conversa)
+    {
+        if (!$conversa->chat_id) return;
+        // 1. Resetar unread_count no banco
+        Chat::updateAll(['unread_count' => 0, 'updated_at' => date('Y-m-d H:i:s')], ['id' => $conversa->chat_id]);
+        // 2. Marcar como lido no WhatsApp via Node.js (best-effort, non-blocking)
+        $chat = Chat::findOne($conversa->chat_id);
+        if ($chat && $chat->chat_id) {
+            try {
+                $ctx = stream_context_create(['http' => ['method' => 'POST', 'timeout' => 2, 'header' => "Content-Type: application/json\r\n"]]);
+                @file_get_contents("http://127.0.0.1:3000/api/mark-read/" . urlencode($chat->chat_id), false, $ctx);
+            } catch (\Exception $e) {
+                // Falha silenciosa - a correcao no banco ja e suficiente
+            }
+        }
+    }
+
+    /**
      * Busca o atendente vinculado ao usuario logado.
      */
     private function getAtendente()
@@ -226,6 +246,7 @@ class ConversaController extends BaseController
         $conversa->status = Conversa::STATUS_FINALIZADA;
         $conversa->finalizada_em = date('Y-m-d H:i:s');
         $conversa->save(false);
+        $this->marcarChatComoLido($conversa);
 
         $userName = $atendente ? $atendente->nome : (Yii::$app->user->identity->username ?? 'admin');
         LogSistema::gravar(LogSistema::TIPO_ATENDIMENTO, LogSistema::NIVEL_INFO,
@@ -281,6 +302,7 @@ class ConversaController extends BaseController
             $conversa->status = Conversa::STATUS_FINALIZADA;
             $conversa->finalizada_em = date('Y-m-d H:i:s');
             $conversa->save(false);
+            $this->marcarChatComoLido($conversa);
             $count++;
         }
 
@@ -535,6 +557,7 @@ class ConversaController extends BaseController
         $conversa->status = Conversa::STATUS_FINALIZADA;
         $conversa->finalizada_em = date('Y-m-d H:i:s');
         $conversa->save(false);
+        $this->marcarChatComoLido($conversa);
 
         $userName = $atendente ? $atendente->nome : (Yii::$app->user->identity->username ?? 'admin');
         LogSistema::gravar(LogSistema::TIPO_ATENDIMENTO, LogSistema::NIVEL_INFO,

@@ -148,6 +148,23 @@ $filaCount = $filaCount ?? 0;
     border-color: #b2dfdb;
     border-style: solid;
 }
+.slot.cliente-esperando {
+    border-color: #dc3545 !important;
+    box-shadow: 0 0 10px rgba(220,53,69,0.35);
+}
+.slot-waiting-bar {
+    background: #dc3545;
+    color: #fff;
+    text-align: center;
+    padding: 3px 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    display: none;
+    flex-shrink: 0;
+}
+.slot.cliente-esperando .slot-waiting-bar {
+    display: block;
+}
 .slot.slot-flash {
     animation: flash-border 0.8s ease-in-out infinite;
     border-width: 3px;
@@ -374,6 +391,27 @@ $filaCount = $filaCount ?? 0;
     font-size: 0.75rem;
     color: #667781;
 }
+
+/* Lightbox modal */
+.media-lightbox {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.88); z-index: 9999;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+}
+.media-lightbox img, .media-lightbox video { max-width: 90vw; max-height: 80vh; border-radius: 6px; }
+.media-lightbox .lb-actions { margin-top: 12px; display: flex; gap: 12px; }
+.media-lightbox .lb-actions a {
+    color: #fff; background: rgba(255,255,255,0.15); border: none;
+    padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; text-decoration: none;
+    display: flex; align-items: center; gap: 6px;
+}
+.media-lightbox .lb-actions a:hover { background: rgba(255,255,255,0.25); }
+.media-lightbox .lb-close {
+    position: absolute; top: 16px; right: 24px;
+    color: #fff; font-size: 2rem; cursor: pointer; background: none; border: none; line-height: 1;
+}
+.media-lightbox .lb-close:hover { color: #ccc; }
+
 .slot-messages .msg-meta {
     text-align: right;
     font-size: 0.62rem;
@@ -1186,7 +1224,8 @@ document.addEventListener('DOMContentLoaded', function() {
             lastMsgId: 0, lastTimestamp: 0, hasNewMsg: false, isSending: false,
             replyingToKey: null, replyingToText: null, replyingToSender: null,
             editingKey: null, editingText: null,
-            avatarColor: '#999'
+            avatarColor: '#999',
+            clienteAguardandoDesde: null
         });
     }
     var contextTarget = null;
@@ -1234,6 +1273,7 @@ document.addEventListener('DOMContentLoaded', function() {
         s.clienteNome = null; s.clienteNumero = null; s.profilePicUrl = null;
         s.lastMsgId = 0; s.hasNewMsg = false; s.isSending = false;
         s.replyingToKey = null; s.editingKey = null;
+        s.clienteAguardandoDesde = null;
 
         var el = document.getElementById('slot' + idx);
         el.className = 'slot slot-empty';
@@ -1264,6 +1304,8 @@ document.addEventListener('DOMContentLoaded', function() {
             + '<div class="drop-item text-danger btn-slot-finalizar" data-slot="' + idx + '"><i class="fas fa-check-circle"></i> Finalizar</div>'
             + '</div>'
             + '</div>'
+            // Waiting bar
+            + '<div class="slot-waiting-bar" id="waitingBar' + idx + '"></div>'
             // Messages
             + '<div class="slot-messages" id="slotMsgs' + idx + '">'
             + '<div class="slot-loading"><i class="fas fa-spinner"></i> Carregando...</div>'
@@ -1413,6 +1455,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Messages: click delegation
         msgsContainer.addEventListener('click', function(e) {
+            // Lightbox para imagens
+            var lbTarget = e.target.closest('[data-lightbox-url]');
+            if (lbTarget) {
+                openLightbox(lbTarget.getAttribute('data-lightbox-url'), lbTarget.getAttribute('data-lightbox-type') || 'image');
+                return;
+            }
+            // Abrir documento em nova aba
+            var docTarget = e.target.closest('[data-doc-url]');
+            if (docTarget) {
+                window.open(docTarget.getAttribute('data-doc-url'), '_blank');
+                return;
+            }
             // Hover reply
             var hoverReply = e.target.closest('.hover-reply');
             if (hoverReply) {
@@ -1482,6 +1536,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         ajaxGet(messagesUrl + '?chat_id=' + s.chatId, function(resp) {
             if (!resp.success || findSlotByChatId(s.chatId) !== idx) return;
+            slots[idx].clienteAguardandoDesde = resp.cliente_aguardando_desde || null;
+            updateWaitingIndicator(idx);
             if (!resp.messages || resp.messages.length === 0) {
                 container.innerHTML = '<div class="slot-loading" style="color:#bbb;">Nenhuma mensagem ainda.</div>';
                 return;
@@ -1500,8 +1556,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!s.chatId || !s.lastMsgId) return;
 
         ajaxGet(messagesUrl + '?chat_id=' + s.chatId + '&after_id=' + s.lastMsgId, function(resp) {
-            if (!resp.success || !resp.messages || resp.messages.length === 0) return;
+            if (!resp.success) return;
             if (findSlotByChatId(s.chatId) !== idx) return;
+            slots[idx].clienteAguardandoDesde = resp.cliente_aguardando_desde || null;
+            updateWaitingIndicator(idx);
+            if (!resp.messages || resp.messages.length === 0) return;
 
             // Verificar se alguma mensagem tem timestamp mais antigo que a ultima renderizada
             // Isso acontece com insercoes manuais ou sync - nesse caso, recarregar tudo
@@ -1658,15 +1717,33 @@ document.addEventListener('DOMContentLoaded', function() {
         return h;
     }
 
+    function openLightbox(url, type) {
+        var overlay = document.createElement('div');
+        overlay.className = 'media-lightbox';
+        var content = type === 'video'
+            ? '<video controls autoplay style="max-width:90vw;max-height:80vh;border-radius:6px;"><source src="' + escapeAttr(url) + '"></video>'
+            : '<img src="' + escapeAttr(url) + '">';
+        overlay.innerHTML = '<button class="lb-close">&times;</button>'
+            + content
+            + '<div class="lb-actions">'
+            + '<a href="' + escapeAttr(url) + '" download><i class="fas fa-download"></i> Download</a>'
+            + '</div>';
+        overlay.querySelector('.lb-close').onclick = function() { overlay.remove(); };
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+    }
+
     function renderMedia(msg) {
         var h = '<div class="msg-media">';
         var t = msg.message_type, url = msg.media_url;
-        if (t === 'image' && url) h += '<img src="' + escapeAttr(url) + '" class="media-image" onclick="window.open(this.src)" title="Ampliar">';
+        if (t === 'image' && url) h += '<img src="' + escapeAttr(url) + '" class="media-image" data-lightbox-url="' + escapeAttr(url) + '" data-lightbox-type="image" title="Clique para ampliar">';
         else if (t === 'sticker' && url) h += '<img src="' + escapeAttr(url) + '" class="media-sticker">';
         else if (t === 'audio' && url) h += '<audio controls class="media-audio"><source src="' + escapeAttr(url) + '"></audio>';
         else if (t === 'video' && url) h += '<video controls class="media-video"><source src="' + escapeAttr(url) + '"></video>';
         else if (t === 'document' && url) {
-            h += '<a href="' + escapeAttr(url) + '" target="_blank" class="media-doc"><i class="fas fa-file-alt"></i> ' + escapeHtml(msg.message_text || 'Documento') + '</a>';
+            h += '<div class="media-doc" data-doc-url="' + escapeAttr(url) + '" style="cursor:pointer;"><i class="fas fa-file-alt"></i> ' + escapeHtml(msg.message_text || 'Documento') + '</div>';
+        } else if (t === 'document' && !url) {
+            h += '<div class="media-doc" style="opacity:0.6;cursor:default;"><i class="fas fa-file-alt"></i> ' + escapeHtml(msg.message_text || 'Documento') + ' <small>(midia indisponivel)</small></div>';
         } else if (t === 'location') h += '<div class="media-icon"><i class="fas fa-map-marker-alt"></i> Local</div>';
         else if (t === 'contact') h += '<div class="media-icon"><i class="fas fa-address-card"></i> Contato</div>';
         else {
@@ -2098,6 +2175,32 @@ document.addEventListener('DOMContentLoaded', function() {
             refreshFila();
         });
     }
+
+    // ==================== WAITING TIMER ====================
+    function updateWaitingIndicator(idx) {
+        var el = document.getElementById('slot' + idx);
+        var bar = document.getElementById('waitingBar' + idx);
+        if (!el || !bar) return;
+        var desde = slots[idx].clienteAguardandoDesde;
+        if (desde) {
+            el.classList.add('cliente-esperando');
+            var diff = Math.floor((Date.now() - new Date(desde.replace(' ', 'T')).getTime()) / 1000);
+            if (diff < 0) diff = 0;
+            var min = Math.floor(diff / 60);
+            var sec = diff % 60;
+            bar.textContent = 'Cliente aguardando ha ' + min + ':' + (sec < 10 ? '0' : '') + sec;
+        } else {
+            el.classList.remove('cliente-esperando');
+            bar.textContent = '';
+        }
+    }
+
+    // Timer global - atualiza indicador de espera a cada segundo
+    setInterval(function() {
+        for (var i = 0; i < MAX_SLOTS; i++) {
+            if (slots[i].chatId) updateWaitingIndicator(i);
+        }
+    }, 1000);
 
     // ==================== POLLING ====================
     function startPolling() {

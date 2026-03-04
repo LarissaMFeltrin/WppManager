@@ -306,6 +306,7 @@ class MonitorController extends BaseController
                 'atendida_em' => $conv->atendida_em,
                 'profile_picture_url' => $profilePic,
                 'account_name' => $conv->whatsappAccount ? $conv->whatsappAccount->session_name : null,
+                'cliente_aguardando_desde' => $conv->cliente_aguardando_desde,
             ];
         }
 
