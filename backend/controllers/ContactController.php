@@ -28,7 +28,9 @@ class ContactController extends BaseController
             ->alias('ct')
             ->innerJoin('whatsapp_accounts wa', 'wa.id = ct.account_id')
             ->with('whatsappAccount')
-            ->orderBy(['ct.name' => SORT_ASC]);
+            ->andWhere(['not like', 'ct.jid', '@lid'])
+            ->andWhere(['not like', 'ct.jid', '@newsletter'])
+            ->orderBy([new \yii\db\Expression('ct.name IS NULL ASC, ct.name ASC')]);
 
         // Filtro por empresa
         if (!$this->isAdmin()) {
@@ -52,7 +54,7 @@ class ContactController extends BaseController
         $dataProvider = new ActiveDataProvider([
             'query' => $query,
             'pagination' => [
-                'pageSize' => 30,
+                'pageSize' => 50,
             ],
         ]);
 
