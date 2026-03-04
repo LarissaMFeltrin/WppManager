@@ -132,6 +132,13 @@ $route = $controllerId . '/' . $actionId;
                 </li>
 
                 <li class="nav-item">
+                    <a href="<?= Url::to(['/monitor/supervisao']) ?>" class="nav-link <?= $controllerId === 'monitor' && $actionId === 'supervisao' ? 'active' : '' ?>">
+                        <i class="nav-icon fas fa-eye"></i>
+                        <p>Supervisao</p>
+                    </a>
+                </li>
+
+                <li class="nav-item">
                     <a href="<?= Url::to(['/monitor/conversas']) ?>" class="nav-link <?= $controllerId === 'monitor' && $actionId === 'conversas' ? 'active' : '' ?>">
                         <i class="nav-icon fas fa-history"></i>
                         <p>Historico Conversas</p>

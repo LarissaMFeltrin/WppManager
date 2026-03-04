@@ -4,10 +4,12 @@ namespace backend\controllers;
 
 use common\models\Atendente;
 use common\models\Chat;
+use common\models\Contact;
 use common\models\Conversa;
 use common\models\Message;
 use common\models\WhatsappAccount;
 use Yii;
+use yii\web\Response;
 
 class MonitorController extends BaseController
 {
@@ -206,5 +208,130 @@ class MonitorController extends BaseController
             'filtroPeriodo' => $periodo,
             'filtroBusca' => $busca,
         ]);
+    }
+
+    /**
+     * Painel de supervisão em tempo real.
+     * GET /monitor/supervisao
+     */
+    public function actionSupervisao()
+    {
+        $atendentes = Atendente::find()->orderBy(['nome' => SORT_ASC])->all();
+
+        $filaCount = (int) Conversa::find()
+            ->andWhere(['status' => Conversa::STATUS_AGUARDANDO])
+            ->count();
+
+        $emAtendimentoCount = (int) Conversa::find()
+            ->andWhere(['status' => Conversa::STATUS_EM_ATENDIMENTO])
+            ->count();
+
+        $atendentesOnline = (int) Atendente::find()
+            ->andWhere(['status' => 'online'])
+            ->count();
+
+        return $this->render('supervisao', [
+            'atendentes' => $atendentes,
+            'filaCount' => $filaCount,
+            'emAtendimentoCount' => $emAtendimentoCount,
+            'atendentesOnline' => $atendentesOnline,
+        ]);
+    }
+
+    /**
+     * JSON com todas as conversas em atendimento (para polling do painel de supervisão).
+     * GET /monitor/supervisao-json
+     */
+    public function actionSupervisaoJson()
+    {
+        Yii::$app->response->format = Response::FORMAT_JSON;
+
+        $conversas = Conversa::find()
+            ->with(['chat', 'atendente', 'whatsappAccount'])
+            ->where(['conversas.status' => Conversa::STATUS_EM_ATENDIMENTO])
+            ->orderBy(['conversas.atendente_id' => SORT_ASC, 'conversas.atendida_em' => SORT_ASC])
+            ->all();
+
+        $data = [];
+        foreach ($conversas as $conv) {
+            // Preview última mensagem
+            $preview = '';
+            $lastMsgFromMe = false;
+            if ($conv->chat_id) {
+                $lastMsg = Message::find()
+                    ->where(['chat_id' => $conv->chat_id])
+                    ->orderBy(['timestamp' => SORT_DESC, 'id' => SORT_DESC])
+                    ->one();
+                if ($lastMsg) {
+                    $preview = $lastMsg->message_text ?: ('[' . $lastMsg->message_type . ']');
+                    if (mb_strlen($preview) > 70) {
+                        $preview = mb_substr($preview, 0, 70) . '...';
+                    }
+                    $lastMsgFromMe = (bool) $lastMsg->is_from_me;
+                }
+            }
+
+            // Tempo em atendimento
+            $tempoAtendimento = '';
+            if ($conv->atendida_em) {
+                $diff = time() - strtotime($conv->atendida_em);
+                if ($diff < 60) $tempoAtendimento = 'Agora';
+                elseif ($diff < 3600) $tempoAtendimento = floor($diff / 60) . 'min';
+                else $tempoAtendimento = floor($diff / 3600) . 'h ' . floor(($diff % 3600) / 60) . 'min';
+            }
+
+            // Foto de perfil
+            $profilePic = null;
+            if ($conv->chat && $conv->chat->chat_id && $conv->chat->chat_type !== 'group') {
+                $contact = Contact::find()
+                    ->where(['jid' => $conv->chat->chat_id])
+                    ->andWhere(['not', ['profile_picture_url' => null]])
+                    ->one();
+                if ($contact) {
+                    $profilePic = $contact->profile_picture_url;
+                }
+            }
+
+            $data[] = [
+                'conversa_id' => $conv->id,
+                'chat_id' => $conv->chat_id,
+                'atendente_id' => $conv->atendente_id,
+                'atendente_nome' => $conv->atendente ? $conv->atendente->nome : '-',
+                'atendente_status' => $conv->atendente ? $conv->atendente->status : 'offline',
+                'cliente_nome' => $conv->cliente_nome ?: 'Cliente',
+                'cliente_numero' => $conv->cliente_numero,
+                'preview' => $preview,
+                'last_msg_from_me' => $lastMsgFromMe,
+                'tempo_atendimento' => $tempoAtendimento,
+                'atendida_em' => $conv->atendida_em,
+                'profile_picture_url' => $profilePic,
+                'account_name' => $conv->whatsappAccount ? $conv->whatsappAccount->session_name : null,
+            ];
+        }
+
+        // Dados dos atendentes
+        $atendentes = Atendente::find()->orderBy(['nome' => SORT_ASC])->all();
+        $atendentesData = [];
+        foreach ($atendentes as $at) {
+            $atendentesData[] = [
+                'id' => $at->id,
+                'nome' => $at->nome,
+                'status' => $at->status,
+                'conversas_ativas' => (int) $at->conversas_ativas,
+                'max_conversas' => (int) $at->max_conversas,
+                'ultimo_acesso' => $at->ultimo_acesso,
+            ];
+        }
+
+        $filaCount = (int) Conversa::find()
+            ->andWhere(['status' => Conversa::STATUS_AGUARDANDO])
+            ->count();
+
+        return [
+            'success' => true,
+            'conversas' => $data,
+            'atendentes' => $atendentesData,
+            'fila_count' => $filaCount,
+        ];
     }
 }
