@@ -145,6 +145,8 @@ app.post('/api/send-message', async (req, res) => {
                 quotedText: quotedText,
             });
             await db.updateChatLastMessage(chatDbId, timestamp);
+            // Atendente respondeu - limpar timer de espera do cliente
+            await db.clearClienteAguardando(chatDbId);
         }
 
         res.json({ success: true, messageId: result.key.id });
@@ -200,6 +202,8 @@ app.post('/api/send-media', upload.single('file'), async (req, res) => {
                 timestamp: timestamp,
             });
             await db.updateChatLastMessage(chatDbId, timestamp);
+            // Atendente respondeu - limpar timer de espera do cliente
+            await db.clearClienteAguardando(chatDbId);
         }
 
         // Limpar arquivo temporário
@@ -248,6 +252,19 @@ app.post('/api/react-message', async (req, res) => {
         await sock.sendMessage(normalizedJid, {
             react: { text: emoji || '', key: key }
         });
+
+        // Atendente reagiu - limpar timer de espera do cliente
+        try {
+            const [chatRows] = await pool.execute(
+                'SELECT id FROM chats WHERE chat_id = ? AND account_id = ?',
+                [normalizedJid, wa.getAccountId()]
+            );
+            if (chatRows.length > 0) {
+                await db.clearClienteAguardando(chatRows[0].id);
+            }
+        } catch (e) {
+            console.error('[react-message] Erro ao limpar timer:', e.message);
+        }
 
         res.json({ success: true });
     } catch (err) {
@@ -465,6 +482,69 @@ app.post('/api/sync-recent/:jid', async (req, res) => {
         const count = Math.min(parseInt(req.query.count) || 50, 200);
         const result = await wa.syncRecentMessages(jid, count);
         res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Debug: forçar re-estabelecimento de sessão E2EE com um contato
+app.post('/api/debug/force-session/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+        const sock = wa.getSocket();
+        const results = [];
+
+        // 1. Subscrever presença
+        try {
+            await sock.presenceSubscribe(jid);
+            results.push('presenceSubscribe OK');
+        } catch (e) { results.push('presenceSubscribe: ' + e.message); }
+
+        // 2. Enviar read receipt para msg do contato (força troca de protocolo)
+        const msgKey = req.body.messageKey;
+        if (msgKey) {
+            try {
+                await sock.readMessages([{ remoteJid: jid, id: msgKey }]);
+                results.push('readMessages OK: ' + msgKey);
+            } catch (e) { results.push('readMessages: ' + e.message); }
+        }
+
+        // 3. Enviar typing indicator
+        try {
+            await sock.sendPresenceUpdate('composing', jid);
+            await new Promise(r => setTimeout(r, 500));
+            await sock.sendPresenceUpdate('paused', jid);
+            results.push('typing indicator OK');
+        } catch (e) { results.push('typing: ' + e.message); }
+
+        // 4. Tentar chatModify para marcar como lido (força comunicação com servidor)
+        try {
+            await sock.chatModify({ markRead: true, lastMessages: [] }, jid);
+            results.push('chatModify markRead OK');
+        } catch (e) { results.push('chatModify: ' + e.message); }
+
+        res.json({ success: true, results });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Marcar chat como lido no WhatsApp (chamado pelo PHP ao finalizar conversa)
+app.post('/api/mark-read/:jid', async (req, res) => {
+    try {
+        let jid = req.params.jid;
+        if (!jid.includes('@')) jid = jid + '@s.whatsapp.net';
+        const sock = wa.getSocket();
+        if (!sock) return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+        await sock.chatModify({ markRead: true, lastMessages: [] }, jid);
+        // Atualizar unread_count no banco tambem
+        const pool = db.getPool();
+        await pool.execute(
+            'UPDATE chats SET unread_count = 0, updated_at = NOW() WHERE account_id = ? AND chat_id = ?',
+            [wa.getAccountId(), jid]
+        );
+        res.json({ success: true });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

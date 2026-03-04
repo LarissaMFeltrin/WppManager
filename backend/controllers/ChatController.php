@@ -234,6 +234,7 @@ class ChatController extends BaseController
             'conversa_id' => $conversa ? $conversa->id : null,
             'conversa_status' => $conversa ? $conversa->status : null,
             'conversa_atendente' => $conversa && $conversa->atendente ? $conversa->atendente->nome : null,
+            'cliente_aguardando_desde' => $conversa ? $conversa->cliente_aguardando_desde : null,
             'messages' => $data,
         ];
     }

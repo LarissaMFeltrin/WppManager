@@ -207,12 +207,13 @@ $this->params['breadcrumbs'][] = $this->title;
                                 <th>Cliente</th>
                                 <th>Atendente</th>
                                 <th>Status</th>
+                                <th>Espera Cliente</th>
                                 <th>Inicio</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if (empty($conversas)): ?>
-                            <tr><td colspan="4" class="text-center text-muted py-3">Nenhuma conversa ativa</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted py-3">Nenhuma conversa ativa</td></tr>
                             <?php endif; ?>
                             <?php foreach ($conversas as $conv): ?>
                             <tr>
@@ -230,6 +231,19 @@ $this->params['breadcrumbs'][] = $this->title;
                                         <span class="badge badge-em-atendimento">Em atendimento</span>
                                     <?php else: ?>
                                         <span class="badge badge-secondary"><?= Html::encode(ucfirst($conv->status)) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if ($conv->cliente_aguardando_desde): ?>
+                                        <?php
+                                        $diff = time() - strtotime($conv->cliente_aguardando_desde);
+                                        if ($diff < 60) $tempoEspera = $diff . 's';
+                                        elseif ($diff < 3600) $tempoEspera = floor($diff / 60) . 'min ' . ($diff % 60) . 's';
+                                        else $tempoEspera = floor($diff / 3600) . 'h ' . floor(($diff % 3600) / 60) . 'min';
+                                        ?>
+                                        <span class="badge" style="background:#dc3545;color:#fff"><?= $tempoEspera ?></span>
+                                    <?php else: ?>
+                                        <span class="badge" style="background:#28a745;color:#fff">Respondido</span>
                                     <?php endif; ?>
                                 </td>
                                 <td class="time-ago">

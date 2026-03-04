@@ -359,6 +359,35 @@ async function getCounts(accountId) {
     };
 }
 
+// Marcar que o cliente está aguardando resposta (só se ainda não estava aguardando)
+async function setClienteAguardando(chatDbId) {
+    const db = getPool();
+    try {
+        await db.execute(
+            `UPDATE conversas SET cliente_aguardando_desde = NOW(), updated_at = NOW()
+             WHERE chat_id = ? AND status = 'em_atendimento' AND cliente_aguardando_desde IS NULL`,
+            [chatDbId]
+        );
+    } catch (err) {
+        console.error('[setClienteAguardando] Erro:', err.message);
+    }
+}
+
+// Limpar timer de espera do cliente (atendente respondeu)
+async function clearClienteAguardando(chatDbId) {
+    const db = getPool();
+    try {
+        await db.execute(
+            `UPDATE conversas SET cliente_aguardando_desde = NULL, updated_at = NOW()
+             WHERE chat_id = ? AND status IN ('em_atendimento', 'aguardando')
+             AND cliente_aguardando_desde IS NOT NULL`,
+            [chatDbId]
+        );
+    } catch (err) {
+        console.error('[clearClienteAguardando] Erro:', err.message);
+    }
+}
+
 module.exports = {
     getPool,
     upsertContact,
@@ -376,4 +405,6 @@ module.exports = {
     getMessages,
     getChats,
     getCounts,
+    setClienteAguardando,
+    clearClienteAguardando,
 };
