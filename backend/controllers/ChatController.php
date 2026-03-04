@@ -83,6 +83,22 @@ class ChatController extends BaseController
                 ]);
                 @file_get_contents($baseUrl . '/api/sync-recent/' . $jid, false, $ctx);
                 @file_get_contents($baseUrl . '/api/sync-chat/' . $jid, false, $ctx);
+
+                // Auto-load history: se msg mais antiga > 01/01/2026, carregar em background
+                $targetTimestamp = mktime(0, 0, 0, 1, 1, 2026);
+                $oldestTs = (new \yii\db\Query())
+                    ->select('MIN(timestamp)')
+                    ->from('messages')
+                    ->where(['chat_id' => $chat->id])
+                    ->andWhere(['>', 'timestamp', 0])
+                    ->scalar();
+
+                if ($oldestTs === false || (int)$oldestTs > $targetTimestamp) {
+                    $loadCtx = stream_context_create([
+                        'http' => ['method' => 'POST', 'timeout' => 2, 'header' => 'Content-Type: application/json'],
+                    ]);
+                    @file_get_contents($baseUrl . '/api/load-history/' . $jid . '?until=' . $targetTimestamp, false, $loadCtx);
+                }
             } catch (\Throwable $e) {
                 // Ignorar erros - sync é best-effort
             }
