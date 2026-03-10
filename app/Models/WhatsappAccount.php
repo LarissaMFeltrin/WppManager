@@ -41,7 +41,7 @@ class WhatsappAccount extends Model
 
     public function atendentes(): BelongsToMany
     {
-        return $this->belongsToMany(Atendente::class, 'atendente_account', 'account_id', 'atendente_id')
+        return $this->belongsToMany(User::class, 'user_account', 'account_id', 'user_id')
             ->withTimestamps();
     }
 

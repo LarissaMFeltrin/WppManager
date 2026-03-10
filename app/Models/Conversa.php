@@ -45,12 +45,12 @@ class Conversa extends Model
 
     public function atendente(): BelongsTo
     {
-        return $this->belongsTo(Atendente::class);
+        return $this->belongsTo(User::class, 'atendente_id');
     }
 
     public function devolvidaPor(): BelongsTo
     {
-        return $this->belongsTo(Atendente::class, 'devolvida_por');
+        return $this->belongsTo(User::class, 'devolvida_por');
     }
 
     public function scopeAguardando($query)
