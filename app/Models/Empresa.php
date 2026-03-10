@@ -27,7 +27,7 @@ class Empresa extends Model
 
     public function atendentes(): HasMany
     {
-        return $this->hasMany(Atendente::class);
+        return $this->hasMany(User::class)->where('role', 'agent');
     }
 
     public function whatsappAccounts(): HasMany

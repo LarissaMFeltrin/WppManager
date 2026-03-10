@@ -2,16 +2,14 @@
 
 namespace App\Models;
 
-use Filament\Models\Contracts\FilamentUser;
-use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-class User extends Authenticatable implements FilamentUser
+class User extends Authenticatable
 {
     use HasFactory, Notifiable;
 
@@ -23,6 +21,10 @@ class User extends Authenticatable implements FilamentUser
         'auth_token',
         'token_expires_at',
         'role',
+        'status_atendimento',
+        'max_conversas',
+        'conversas_ativas',
+        'ultimo_acesso',
     ];
 
     protected $hidden = [
@@ -36,13 +38,11 @@ class User extends Authenticatable implements FilamentUser
         return [
             'email_verified_at' => 'datetime',
             'token_expires_at' => 'datetime',
+            'ultimo_acesso' => 'datetime',
             'password' => 'hashed',
+            'max_conversas' => 'integer',
+            'conversas_ativas' => 'integer',
         ];
-    }
-
-    public function canAccessPanel(Panel $panel): bool
-    {
-        return true;
     }
 
     public function empresa(): BelongsTo
@@ -50,14 +50,25 @@ class User extends Authenticatable implements FilamentUser
         return $this->belongsTo(Empresa::class);
     }
 
-    public function atendente(): HasOne
-    {
-        return $this->hasOne(Atendente::class);
-    }
-
-    public function whatsappAccounts(): HasMany
+    public function whatsappAccountsOwned(): HasMany
     {
         return $this->hasMany(WhatsappAccount::class);
+    }
+
+    public function whatsappAccounts(): BelongsToMany
+    {
+        return $this->belongsToMany(WhatsappAccount::class, 'user_account', 'user_id', 'account_id')
+            ->withTimestamps();
+    }
+
+    public function conversas(): HasMany
+    {
+        return $this->hasMany(Conversa::class, 'atendente_id');
+    }
+
+    public function conversasDevolvidas(): HasMany
+    {
+        return $this->hasMany(Conversa::class, 'devolvida_por');
     }
 
     public function sentMessages(): HasMany
@@ -78,5 +89,45 @@ class User extends Authenticatable implements FilamentUser
     public function isAgent(): bool
     {
         return $this->role === 'agent';
+    }
+
+    public function isOnline(): bool
+    {
+        return $this->status_atendimento === 'online';
+    }
+
+    public function isOcupado(): bool
+    {
+        return $this->status_atendimento === 'ocupado';
+    }
+
+    public function isOffline(): bool
+    {
+        return $this->status_atendimento === 'offline';
+    }
+
+    public function podeReceberConversa(): bool
+    {
+        return $this->isOnline() && $this->conversas_ativas < $this->max_conversas;
+    }
+
+    // AdminLTE required methods
+    public function adminlte_desc(): string
+    {
+        return match ($this->role) {
+            'admin' => 'Administrador',
+            'supervisor' => 'Supervisor',
+            default => 'Agente',
+        };
+    }
+
+    public function adminlte_image(): ?string
+    {
+        return null; // Retorna null para usar o avatar padrão
+    }
+
+    public function adminlte_profile_url(): ?string
+    {
+        return null; // Pode ser configurado para uma rota de perfil futuramente
     }
 }
