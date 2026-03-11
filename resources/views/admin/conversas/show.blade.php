@@ -54,9 +54,21 @@
             <div class="card-body" style="max-height: 500px; overflow-y: auto; background: #f4f6f9;">
                 @if($conversa->chat && $conversa->chat->messages->count() > 0)
                     @foreach($conversa->chat->messages as $msg)
-                        <div class="mb-2 p-2 rounded {{ $msg->from_me ? 'bg-success text-white ml-5' : 'bg-white mr-5' }}">
-                            <div>{{ $msg->content }}</div>
-                            <small class="{{ $msg->from_me ? 'text-light' : 'text-muted' }}">
+                        <div class="mb-2 p-2 rounded {{ $msg->is_from_me ? 'bg-success text-white ml-5' : 'bg-white mr-5' }}">
+                            <div>
+                                @if($msg->message_type === 'image')
+                                    <i class="fas fa-image"></i> Imagem
+                                @elseif($msg->message_type === 'audio')
+                                    <i class="fas fa-microphone"></i> Audio
+                                @elseif($msg->message_type === 'video')
+                                    <i class="fas fa-video"></i> Video
+                                @elseif($msg->message_type === 'document')
+                                    <i class="fas fa-file"></i> {{ $msg->message_text ?? 'Documento' }}
+                                @else
+                                    {{ $msg->message_text }}
+                                @endif
+                            </div>
+                            <small class="{{ $msg->is_from_me ? 'text-light' : 'text-muted' }}">
                                 {{ $msg->created_at->format('d/m H:i') }}
                             </small>
                         </div>

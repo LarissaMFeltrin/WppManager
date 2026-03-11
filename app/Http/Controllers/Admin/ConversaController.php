@@ -93,11 +93,32 @@ class ConversaController extends Controller
 
     public function transferir(Request $request, Conversa $conversa)
     {
+        $antigoAtendente = $conversa->atendente_id;
+
+        // Devolver para fila
+        if ($request->boolean('devolver_fila')) {
+            $conversa->update([
+                'atendente_id' => null,
+                'status' => 'aguardando',
+                'devolvida_por' => $antigoAtendente,
+                'cliente_aguardando_desde' => now(),
+            ]);
+
+            if ($antigoAtendente) {
+                User::where('id', $antigoAtendente)->decrement('conversas_ativas');
+            }
+
+            if ($request->ajax()) {
+                return response()->json(['success' => true]);
+            }
+
+            return redirect()->back()->with('success', 'Conversa devolvida para a fila!');
+        }
+
+        // Transferir para outro atendente
         $validated = $request->validate([
             'atendente_id' => 'required|exists:users,id',
         ]);
-
-        $antigoAtendente = $conversa->atendente_id;
 
         $conversa->update([
             'atendente_id' => $validated['atendente_id'],
@@ -108,6 +129,10 @@ class ConversaController extends Controller
             User::where('id', $antigoAtendente)->decrement('conversas_ativas');
         }
         User::where('id', $validated['atendente_id'])->increment('conversas_ativas');
+
+        if ($request->ajax()) {
+            return response()->json(['success' => true]);
+        }
 
         return redirect()->back()->with('success', 'Conversa transferida!');
     }

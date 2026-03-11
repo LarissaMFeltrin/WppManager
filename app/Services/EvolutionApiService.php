@@ -33,10 +33,23 @@ class EvolutionApiService
                 ];
             }
 
+            $body = $response->json();
+            $errorMsg = $body['message']
+                ?? $body['error']
+                ?? $body['response']['message']
+                ?? json_encode($body);
+
+            Log::warning('Evolution API Error Response', [
+                'url' => $url,
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
+
             return [
                 'success' => false,
-                'error' => $response->json()['message'] ?? 'Erro desconhecido',
+                'error' => $errorMsg,
                 'status' => $response->status(),
+                'body' => $body,
             ];
         } catch (\Exception $e) {
             Log::error('Evolution API Error: ' . $e->getMessage());
@@ -125,19 +138,82 @@ class EvolutionApiService
 
     public function sendText(string $instanceName, string $number, string $text): array
     {
+        // Formato Evolution API v2.x
         return $this->request('post', "/message/sendText/{$instanceName}", [
             'number' => $number,
-            'text' => $text,
+            'textMessage' => [
+                'text' => $text,
+            ],
         ]);
     }
 
     public function sendMedia(string $instanceName, string $number, string $mediaType, string $mediaUrl, ?string $caption = null): array
     {
-        return $this->request('post', "/message/sendMedia/{$instanceName}", [
-            'number' => $number,
+        // Formato Evolution API v2.x
+        $mediaMessage = [
             'mediatype' => $mediaType,
             'media' => $mediaUrl,
-            'caption' => $caption,
+        ];
+
+        if ($caption) {
+            $mediaMessage['caption'] = $caption;
+        }
+
+        return $this->request('post', "/message/sendMedia/{$instanceName}", [
+            'number' => $number,
+            'mediaMessage' => $mediaMessage,
+        ]);
+    }
+
+    /**
+     * Enviar mídia usando base64 (Evolution API v1.7.x)
+     */
+    public function sendMediaBase64(string $instanceName, string $number, string $mediaType, string $base64, string $mimeType, ?string $caption = null, ?string $fileName = null): array
+    {
+        // Evolution API v1.7.x - base64 PURO sem prefixo data:mime;base64,
+        $mediaMessage = [
+            'mediatype' => $mediaType,
+            'mimetype' => $mimeType,
+            'media' => $base64,
+        ];
+
+        // Caption deve ser string válida, não null
+        if ($caption !== null && trim($caption) !== '') {
+            $mediaMessage['caption'] = (string) $caption;
+        }
+
+        if ($fileName) {
+            $mediaMessage['fileName'] = $fileName;
+        }
+
+        return $this->request('post', "/message/sendMedia/{$instanceName}", [
+            'number' => $number,
+            'mediaMessage' => $mediaMessage,
+        ]);
+    }
+
+    public function sendImageBase64(string $instanceName, string $number, string $base64, string $mimeType, ?string $caption = null): array
+    {
+        return $this->sendMediaBase64($instanceName, $number, 'image', $base64, $mimeType, $caption);
+    }
+
+    public function sendVideoBase64(string $instanceName, string $number, string $base64, string $mimeType, ?string $caption = null): array
+    {
+        return $this->sendMediaBase64($instanceName, $number, 'video', $base64, $mimeType, $caption);
+    }
+
+    public function sendDocumentBase64(string $instanceName, string $number, string $base64, string $mimeType, string $fileName): array
+    {
+        return $this->sendMediaBase64($instanceName, $number, 'document', $base64, $mimeType, null, $fileName);
+    }
+
+    public function sendAudioBase64(string $instanceName, string $number, string $base64, string $mimeType): array
+    {
+        // Evolution API v1.7.x formato para áudio
+        return $this->request('post', "/message/sendWhatsAppAudio/{$instanceName}", [
+            'number' => $number,
+            'encoding' => true,
+            'audio' => $base64,
         ]);
     }
 
@@ -155,17 +231,22 @@ class EvolutionApiService
     {
         return $this->request('post', "/message/sendWhatsAppAudio/{$instanceName}", [
             'number' => $number,
-            'audio' => $audioUrl,
+            'audioMessage' => [
+                'audio' => $audioUrl,
+            ],
         ]);
     }
 
     public function sendDocument(string $instanceName, string $number, string $documentUrl, string $fileName): array
     {
+        // Formato Evolution API v2.x
         return $this->request('post', "/message/sendMedia/{$instanceName}", [
             'number' => $number,
-            'mediatype' => 'document',
-            'media' => $documentUrl,
-            'fileName' => $fileName,
+            'mediaMessage' => [
+                'mediatype' => 'document',
+                'media' => $documentUrl,
+                'fileName' => $fileName,
+            ],
         ]);
     }
 
@@ -179,18 +260,44 @@ class EvolutionApiService
         ]);
     }
 
+    public function sendReaction(string $instanceName, string $remoteJid, string $messageId, string $emoji): array
+    {
+        return $this->request('post', "/message/sendReaction/{$instanceName}", [
+            'key' => [
+                'remoteJid' => $remoteJid,
+                'id' => $messageId,
+            ],
+            'reaction' => $emoji,
+        ]);
+    }
+
+    public function sendPresence(string $instanceName, string $number, string $presence = 'composing'): array
+    {
+        // presence: composing, recording, paused - Formato Evolution API v2.x
+        return $this->request('post', "/chat/sendPresence/{$instanceName}", [
+            'number' => $number,
+            'options' => [
+                'presence' => $presence,
+                'delay' => 1000,
+            ],
+        ]);
+    }
+
     // === Histórico ===
 
-    public function fetchMessages(string $instanceName, string $remoteJid, int $limit = 20): array
+    public function fetchMessages(string $instanceName, string $remoteJid = '', int $limit = 20): array
     {
-        return $this->request('post', "/chat/fetchMessages/{$instanceName}", [
-            'where' => [
+        $payload = ['limit' => $limit];
+
+        if ($remoteJid) {
+            $payload['where'] = [
                 'key' => [
                     'remoteJid' => $remoteJid,
                 ],
-            ],
-            'limit' => $limit,
-        ]);
+            ];
+        }
+
+        return $this->request('post', "/chat/findMessages/{$instanceName}", $payload);
     }
 
     // === Chats ===
@@ -221,7 +328,7 @@ class EvolutionApiService
 
     public function fetchContacts(string $instanceName): array
     {
-        return $this->request('get', "/chat/fetchContacts/{$instanceName}");
+        return $this->request('post', "/chat/findContacts/{$instanceName}");
     }
 
     public function getProfilePicture(string $instanceName, string $number): array
@@ -283,6 +390,25 @@ class EvolutionApiService
         return $this->request('post', "/group/create/{$instanceName}", [
             'subject' => $subject,
             'participants' => $participants,
+        ]);
+    }
+
+    // === Download de Mídia ===
+
+    public function downloadMedia(string $instanceName, string $messageId, ?string $remoteJid = null, bool $fromMe = false): array
+    {
+        $key = ['id' => $messageId];
+
+        if ($remoteJid) {
+            $key['remoteJid'] = $remoteJid;
+        }
+        $key['fromMe'] = $fromMe;
+
+        return $this->request('post', "/chat/getBase64FromMediaMessage/{$instanceName}", [
+            'message' => [
+                'key' => $key,
+            ],
+            'convertToMp4' => false,
         ]);
     }
 

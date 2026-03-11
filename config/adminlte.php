@@ -90,8 +90,8 @@ return [
     'logout_url' => 'logout',
     'login_url' => 'login',
     'register_url' => false,
-    'password_reset_url' => 'password/reset',
-    'password_email_url' => 'password/email',
+    'password_reset_url' => false,
+    'password_email_url' => false,
     'profile_url' => false,
     'disable_darkmode_routes' => false,
 
@@ -105,19 +105,35 @@ return [
         ],
 
         // Sidebar
-        ['header' => 'PRINCIPAL'],
+        ['header' => 'MONITORAMENTO'],
         [
             'text' => 'Dashboard',
             'route' => 'admin.dashboard',
             'icon' => 'fas fa-fw fa-tachometer-alt',
         ],
+        [
+            'text' => 'Empresas',
+            'route' => 'admin.empresas.index',
+            'icon' => 'fas fa-fw fa-building',
+        ],
+
+        ['header' => 'WHATSAPP'],
+        [
+            'text' => 'Instancias',
+            'route' => 'admin.whatsapp.index',
+            'icon' => 'fab fa-fw fa-whatsapp',
+        ],
+        [
+            'text' => 'Nova Instancia',
+            'route' => 'admin.whatsapp.create',
+            'icon' => 'fas fa-fw fa-plus',
+        ],
 
         ['header' => 'ATENDIMENTO'],
         [
             'text' => 'Painel de Conversas',
-            'route' => 'admin.conversas.index',
-            'icon' => 'fas fa-fw fa-comments',
-            'label_color' => 'warning',
+            'route' => 'admin.painel',
+            'icon' => 'fas fa-fw fa-headset',
         ],
         [
             'text' => 'Fila de Espera',
@@ -125,9 +141,14 @@ return [
             'icon' => 'fas fa-fw fa-users-cog',
         ],
         [
-            'text' => 'Chat',
+            'text' => 'Meu Console',
             'route' => 'admin.chat',
             'icon' => 'fas fa-fw fa-comment-dots',
+        ],
+        [
+            'text' => 'Contatos',
+            'route' => 'admin.contatos.index',
+            'icon' => 'fas fa-fw fa-address-book',
         ],
 
         ['header' => 'MONITORAMENTO'],
@@ -142,9 +163,19 @@ return [
             'icon' => 'fas fa-fw fa-eye',
         ],
         [
-            'text' => 'Historico',
+            'text' => 'Historico Conversas',
             'route' => 'admin.historico',
             'icon' => 'fas fa-fw fa-history',
+        ],
+        [
+            'text' => 'Logs de Webhook',
+            'route' => 'admin.logs',
+            'icon' => 'fas fa-fw fa-file-alt',
+        ],
+        [
+            'text' => 'Sincronizar Contatos',
+            'route' => 'admin.contatos.sincronizar.page',
+            'icon' => 'fas fa-fw fa-sync',
         ],
 
         ['header' => 'CONFIGURACOES'],
@@ -154,26 +185,10 @@ return [
             'icon' => 'fas fa-fw fa-users',
         ],
         [
-            'text' => 'Empresas',
-            'route' => 'admin.empresas.index',
-            'icon' => 'fas fa-fw fa-building',
-        ],
-        [
-            'text' => 'Instancias WhatsApp',
-            'route' => 'admin.whatsapp.index',
-            'icon' => 'fab fa-fw fa-whatsapp',
-        ],
-        [
-            'text' => 'Contatos',
-            'route' => 'admin.contatos.index',
-            'icon' => 'fas fa-fw fa-address-book',
-        ],
-
-        ['header' => 'SISTEMA'],
-        [
-            'text' => 'Logs Webhook',
-            'route' => 'admin.logs',
-            'icon' => 'fas fa-fw fa-file-alt',
+            'text' => 'Atendentes',
+            'route' => 'admin.users.index',
+            'icon' => 'fas fa-fw fa-user-tie',
+            'url' => 'admin/users?role=agent',
         ],
     ],
 

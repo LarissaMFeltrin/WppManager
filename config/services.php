@@ -40,4 +40,9 @@ return [
         'api_key' => env('EVOLUTION_API_KEY', ''),
     ],
 
+    'baileys' => [
+        'url' => env('BAILEYS_SERVICE_URL', 'http://localhost:3001'),
+        'enabled' => env('BAILEYS_SERVICE_ENABLED', false),
+    ],
+
 ];
