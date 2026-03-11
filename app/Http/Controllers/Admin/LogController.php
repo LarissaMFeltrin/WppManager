@@ -16,11 +16,15 @@ class LogController extends Controller
             $query->where('tipo', $request->tipo);
         }
 
-        if ($request->filled('search')) {
-            $query->where('descricao', 'like', '%' . $request->search . '%');
+        if ($request->filled('nivel')) {
+            $query->where('nivel', $request->nivel);
         }
 
-        $logs = $query->orderBy('created_at', 'desc')->paginate(50);
+        if ($request->filled('search')) {
+            $query->where('mensagem', 'like', '%' . $request->search . '%');
+        }
+
+        $logs = $query->orderBy('criada_em', 'desc')->paginate(50)->withQueryString();
 
         return view('admin.logs.index', compact('logs'));
     }

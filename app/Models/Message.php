@@ -11,11 +11,15 @@ class Message extends Model
         'chat_id',
         'message_key',
         'from_jid',
+        'sender_name',
+        'participant_jid',
         'to_jid',
         'message_text',
         'message_type',
         'media_url',
         'media_mime_type',
+        'media_filename',
+        'media_duration',
         'is_from_me',
         'sent_by_user_id',
         'timestamp',
@@ -57,5 +61,48 @@ class Message extends Model
     public function quotedMessage(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'quoted_message_id', 'message_key');
+    }
+
+    /**
+     * Obter a data/hora real da mensagem (do timestamp)
+     */
+    public function getMessageTimeAttribute(): string
+    {
+        if ($this->timestamp) {
+            return \Carbon\Carbon::createFromTimestamp($this->timestamp, 'America/Sao_Paulo')->format('H:i');
+        }
+        return $this->created_at?->format('H:i') ?? '';
+    }
+
+    /**
+     * Obter data/hora completa da mensagem
+     */
+    public function getMessageDatetimeAttribute(): ?\Carbon\Carbon
+    {
+        if ($this->timestamp) {
+            return \Carbon\Carbon::createFromTimestamp($this->timestamp, 'America/Sao_Paulo');
+        }
+        return $this->created_at;
+    }
+
+    /**
+     * Obter data formatada (para separadores de dia)
+     */
+    public function getMessageDateAttribute(): string
+    {
+        if ($this->timestamp) {
+            $date = \Carbon\Carbon::createFromTimestamp($this->timestamp, 'America/Sao_Paulo');
+            $today = \Carbon\Carbon::today('America/Sao_Paulo');
+            $yesterday = \Carbon\Carbon::yesterday('America/Sao_Paulo');
+
+            if ($date->isSameDay($today)) {
+                return 'Hoje';
+            } elseif ($date->isSameDay($yesterday)) {
+                return 'Ontem';
+            } else {
+                return $date->format('d/m/Y');
+            }
+        }
+        return $this->created_at?->format('d/m/Y') ?? '';
     }
 }

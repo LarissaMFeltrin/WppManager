@@ -1,0 +1,23 @@
+{
+  "name": "wpp-manager-whatsapp-service",
+  "version": "1.0.0",
+  "description": "Serviço WhatsApp com Baileys - WPP Manager",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "mysql2": "^3.12.0",
+    "node-cache": "^5.1.2",
+    "pino": "^9.6.0",
+    "pm2": "^6.0.14",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

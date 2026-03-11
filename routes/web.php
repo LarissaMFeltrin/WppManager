@@ -49,6 +49,31 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::post('chat/{conversa}/enviar', [ChatController::class, 'enviar'])->name('chat.enviar');
     Route::get('fila', [ChatController::class, 'fila'])->name('fila');
 
+    // Painel de Conversas (Dashboard de Atendimento)
+    Route::get('painel', [ChatController::class, 'painel'])->name('painel');
+    Route::post('painel/{conversa}/enviar', [ChatController::class, 'enviarAjax'])->name('painel.enviar');
+    Route::get('painel/{conversa}/mensagens', [ChatController::class, 'mensagens'])->name('painel.mensagens');
+    Route::post('painel/{conversa}/finalizar', [ChatController::class, 'finalizarAjax'])->name('painel.finalizar');
+
+    // Envio de mídia
+    Route::post('painel/{conversa}/enviar-imagem', [ChatController::class, 'enviarImagem'])->name('painel.enviar-imagem');
+    Route::post('painel/{conversa}/enviar-documento', [ChatController::class, 'enviarDocumento'])->name('painel.enviar-documento');
+    Route::post('painel/{conversa}/enviar-audio', [ChatController::class, 'enviarAudio'])->name('painel.enviar-audio');
+    Route::post('painel/{conversa}/enviar-video', [ChatController::class, 'enviarVideo'])->name('painel.enviar-video');
+
+    // Interações com mensagens
+    Route::post('painel/{conversa}/reagir', [ChatController::class, 'reagir'])->name('painel.reagir');
+    Route::post('painel/{conversa}/deletar', [ChatController::class, 'deletar'])->name('painel.deletar');
+    Route::post('painel/{conversa}/editar', [ChatController::class, 'editar'])->name('painel.editar');
+    Route::post('painel/{conversa}/encaminhar', [ChatController::class, 'encaminhar'])->name('painel.encaminhar');
+    Route::post('painel/{conversa}/marcar-lido', [ChatController::class, 'marcarLido'])->name('painel.marcar-lido');
+    Route::post('painel/{conversa}/digitando', [ChatController::class, 'digitando'])->name('painel.digitando');
+
+    // Sincronização de histórico
+    Route::post('painel/{conversa}/sincronizar-historico', [ChatController::class, 'sincronizarHistorico'])->name('painel.sincronizar-historico');
+    Route::post('painel/{conversa}/baixar-midias', [ChatController::class, 'baixarMidias'])->name('painel.baixar-midias');
+    Route::post('whatsapp/{account}/sincronizar-chats', [ChatController::class, 'sincronizarChats'])->name('whatsapp.sincronizar-chats');
+
     // Monitor
     Route::get('monitor', [MonitorController::class, 'index'])->name('monitor');
     Route::get('supervisao', [MonitorController::class, 'supervisao'])->name('supervisao');
@@ -56,9 +81,11 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
 
     // Contatos
     Route::get('contatos', [ContactController::class, 'index'])->name('contatos.index');
+    Route::get('contatos/sincronizar', [ContactController::class, 'sincronizarPage'])->name('contatos.sincronizar.page');
     Route::get('contatos/{contact}/edit', [ContactController::class, 'edit'])->name('contatos.edit');
     Route::put('contatos/{contact}', [ContactController::class, 'update'])->name('contatos.update');
     Route::post('contatos/sincronizar', [ContactController::class, 'sincronizar'])->name('contatos.sincronizar');
+    Route::post('contatos/enviar-mensagem', [ContactController::class, 'enviarMensagem'])->name('contatos.enviar-mensagem');
 
     // Logs
     Route::get('logs', [LogController::class, 'index'])->name('logs');
