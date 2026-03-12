@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Chat;
+use App\Models\Contact;
+use App\Models\ContactAlias;
 use App\Models\Conversa;
 use App\Models\Message;
 use App\Models\WhatsappAccount;
@@ -85,6 +88,39 @@ class ChatController extends Controller
         return view('admin.chat.fila', compact('conversas', 'user', 'conversasAtivas', 'maxSlots'));
     }
 
+    public function filaDados()
+    {
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
+
+        $conversas = Conversa::whereIn('account_id', $accountIds)
+            ->where('status', 'aguardando')
+            ->with(['account', 'chat.messages' => function ($q) {
+                $q->orderBy('created_at', 'desc')->limit(1);
+            }])
+            ->orderBy('cliente_aguardando_desde', 'asc')
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        $result = $conversas->map(function ($conversa) {
+            $ultimaMensagem = $conversa->chat?->messages?->first();
+            $tempoNaFila = $conversa->cliente_aguardando_desde ?? $conversa->created_at;
+            $diffHoras = $tempoNaFila->diffInHours(now());
+            $diffMinutos = $tempoNaFila->diffInMinutes(now()) % 60;
+
+            return [
+                'id' => $conversa->id,
+                'cliente_nome' => $conversa->cliente_nome,
+                'cliente_numero' => $conversa->cliente_numero,
+                'ultima_mensagem' => $ultimaMensagem?->message_text ?? '',
+                'tempo_na_fila' => $diffHoras . 'h ' . $diffMinutos . 'min',
+                'instancia' => $conversa->account?->session_name,
+            ];
+        });
+
+        return response()->json(['conversas' => $result]);
+    }
+
     public function painel()
     {
         $user = Auth::user();
@@ -120,6 +156,102 @@ class ChatController extends Controller
     }
 
     /**
+     * Iniciar nova conversa com um número
+     */
+    public function novaConversa(Request $request)
+    {
+        $validated = $request->validate([
+            'account_id' => 'required|exists:whatsapp_accounts,id',
+            'numero' => 'required|string|max:50',
+            'nome' => 'nullable|string|max:255',
+            'mensagem' => 'required|string|max:4096',
+        ]);
+
+        $user = Auth::user();
+        $account = WhatsappAccount::findOrFail($validated['account_id']);
+
+        // Verificar se a conta pertence à empresa do usuário
+        if ($account->empresa_id !== $user->empresa_id) {
+            return response()->json(['error' => 'Acesso negado'], 403);
+        }
+
+        // Limpar número (remover espaços, traços, etc)
+        $numero = preg_replace('/[^0-9]/', '', $validated['numero']);
+        $jid = $numero . '@s.whatsapp.net';
+        $nome = $validated['nome'] ?: $numero;
+
+        try {
+            // 1. Enviar a mensagem primeiro
+            $result = $this->evolution->sendText(
+                $account->session_name,
+                $numero,
+                $validated['mensagem']
+            );
+
+            // 2. Criar ou buscar o chat
+            $chat = Chat::firstOrCreate(
+                [
+                    'account_id' => $account->id,
+                    'chat_id' => $jid,
+                ],
+                [
+                    'chat_name' => $nome,
+                    'chat_type' => 'individual',
+                    'last_message_timestamp' => now()->timestamp,
+                ]
+            );
+
+            // 3. Criar ou buscar contato
+            Contact::updateOrCreate(
+                [
+                    'account_id' => $account->id,
+                    'jid' => $jid,
+                ],
+                [
+                    'name' => $nome,
+                    'phone_number' => $numero,
+                ]
+            );
+
+            // 4. Criar conversa para atendimento
+            $conversa = Conversa::create([
+                'account_id' => $account->id,
+                'chat_id' => $chat->id,
+                'cliente_numero' => $numero,
+                'cliente_nome' => $nome,
+                'status' => 'em_atendimento',
+                'atendente_id' => $user->id,
+                'atendido_em' => now(),
+                'ultima_msg_em' => now(),
+            ]);
+
+            // 5. Salvar a mensagem enviada
+            if (isset($result['key'])) {
+                Message::create([
+                    'chat_id' => $chat->id,
+                    'message_key' => $result['key']['id'] ?? uniqid('msg_'),
+                    'from_jid' => $account->owner_jid ?? ($account->phone_number . '@s.whatsapp.net'),
+                    'to_jid' => $jid,
+                    'message_text' => $validated['mensagem'],
+                    'message_type' => 'text',
+                    'is_from_me' => true,
+                    'sent_by_user_id' => $user->id,
+                    'timestamp' => now()->timestamp,
+                    'status' => 'sent',
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Conversa iniciada com {$nome}!",
+                'conversa_id' => $conversa->id,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Erro ao enviar: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
      * Enviar mensagem (alias para compatibilidade)
      */
     public function enviar(Request $request, Conversa $conversa)
@@ -145,22 +277,22 @@ class ChatController extends Controller
             $fromJid = $conversa->account->owner_jid
                 ?? ($conversa->account->phone_number . '@s.whatsapp.net');
 
-            // Se tem mensagem citada, usar Baileys (se disponível)
-            if ($quotedId && $this->whatsapp->isBaileysAvailable()) {
-                $result = $this->whatsapp->replyMessage(
-                    $jid,
-                    $validated['mensagem'],
-                    $quotedId,
-                    Auth::id()
-                );
-            } else {
-                // Envio normal via Evolution
-                $result = $this->evolution->sendText(
-                    $conversa->account->session_name,
-                    $conversa->cliente_numero,
-                    $validated['mensagem']
-                );
+            // Buscar informações da mensagem citada (se houver)
+            $quotedFromMe = false;
+            if ($quotedId) {
+                $quotedMsg = Message::where('message_key', $quotedId)->first();
+                $quotedFromMe = $quotedMsg?->is_from_me ?? false;
             }
+
+            // Enviar via Evolution API (com ou sem citação)
+            $result = $this->evolution->sendText(
+                $conversa->account->session_name,
+                $conversa->cliente_numero,
+                $validated['mensagem'],
+                $quotedId,    // ID da mensagem citada (ou null)
+                $jid,         // remoteJid para a citação
+                $quotedFromMe // se a mensagem citada foi enviada por mim
+            );
 
             // Verificar se o envio foi bem sucedido
             if (!($result['success'] ?? false)) {
@@ -174,11 +306,10 @@ class ChatController extends Controller
             if ($conversa->chat) {
                 $messageKey = $result['data']['key']['id'] ?? $result['key']['id'] ?? uniqid();
 
-                // Buscar texto da mensagem citada
+                // Buscar texto da mensagem citada (reutilizar $quotedMsg se já foi buscado)
                 $quotedText = null;
-                if ($quotedId) {
-                    $quotedMsg = Message::where('message_key', $quotedId)->first();
-                    $quotedText = $quotedMsg ? ($quotedMsg->message_text ?? '[Mídia]') : null;
+                if ($quotedId && isset($quotedMsg) && $quotedMsg) {
+                    $quotedText = $quotedMsg->message_text ?? '[Mídia]';
                 }
 
                 $dbMessage = Message::create([
@@ -526,33 +657,37 @@ class ChatController extends Controller
         try {
             $jid = $conversa->chat->chat_id ?? ($conversa->cliente_numero . '@s.whatsapp.net');
 
+            // Buscar mensagem para saber se é fromMe
+            $message = Message::where('message_key', $validated['message_key'])
+                ->orWhere('message_key', 'like', '%' . $validated['message_key'])
+                ->first();
+
+            $fromMe = $message ? $message->is_from_me : false;
+
             // Tentar via Evolution primeiro
             $result = $this->evolution->sendReaction(
                 $conversa->account->session_name,
                 $jid,
                 $validated['message_key'],
-                $validated['emoji']
+                $validated['emoji'],
+                $fromMe
             );
 
-            // Se falhou e Baileys está disponível, tentar via Baileys
-            if (!$result['success'] && $this->whatsapp->isBaileysAvailable()) {
-                $result = $this->whatsapp->reactMessage(
-                    $jid,
-                    $validated['message_key'],
-                    $validated['emoji']
-                );
-            }
-
-            // Atualizar reações no banco
-            $message = Message::where('message_key', $validated['message_key'])->first();
+            // Atualizar reações no banco (substituir reação anterior do mesmo remetente)
             if ($message) {
                 $reactions = $message->reactions ?? [];
+
+                // Remover reação anterior do mesmo remetente ('me')
+                $reactions = array_filter($reactions, fn($r) => ($r['from'] ?? '') !== 'me');
+
+                // Adicionar nova reação
                 $reactions[] = [
                     'emoji' => $validated['emoji'],
                     'from' => 'me',
                     'timestamp' => time(),
                 ];
-                $message->update(['reactions' => $reactions]);
+
+                $message->update(['reactions' => array_values($reactions)]);
             }
 
             return response()->json(['success' => true]);
@@ -571,20 +706,21 @@ class ChatController extends Controller
         ]);
 
         try {
-            if (!$this->whatsapp->isBaileysAvailable()) {
-                return response()->json(['error' => 'Funcionalidade requer Baileys'], 400);
-            }
-
             $jid = $conversa->chat->chat_id ?? ($conversa->cliente_numero . '@s.whatsapp.net');
 
-            $result = $this->whatsapp->deleteMessage($jid, $validated['message_key']);
+            // Usar Evolution API
+            $result = $this->evolution->deleteMessage(
+                $conversa->account->session_name,
+                $jid,
+                $validated['message_key'],
+                true // fromMe
+            );
 
-            if ($result['success']) {
-                Message::where('message_key', $validated['message_key'])
-                    ->update(['is_deleted' => true]);
-            }
+            // Atualizar no banco independente do resultado da API
+            Message::where('message_key', $validated['message_key'])
+                ->update(['is_deleted' => true]);
 
-            return response()->json(['success' => $result['success']]);
+            return response()->json(['success' => true]);
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
@@ -601,23 +737,24 @@ class ChatController extends Controller
         ]);
 
         try {
-            if (!$this->whatsapp->isBaileysAvailable()) {
-                return response()->json(['error' => 'Funcionalidade requer Baileys'], 400);
-            }
-
             $jid = $conversa->chat->chat_id ?? ($conversa->cliente_numero . '@s.whatsapp.net');
 
-            $result = $this->whatsapp->editMessage($jid, $validated['message_key'], $validated['new_text']);
+            // Usar Evolution API
+            $result = $this->evolution->editMessage(
+                $conversa->account->session_name,
+                $jid,
+                $validated['message_key'],
+                $validated['new_text']
+            );
 
-            if ($result['success']) {
-                Message::where('message_key', $validated['message_key'])
-                    ->update([
-                        'message_text' => $validated['new_text'],
-                        'is_edited' => true,
-                    ]);
-            }
+            // Atualizar no banco
+            Message::where('message_key', $validated['message_key'])
+                ->update([
+                    'message_text' => $validated['new_text'],
+                    'is_edited' => true,
+                ]);
 
-            return response()->json(['success' => $result['success']]);
+            return response()->json(['success' => true]);
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
@@ -630,24 +767,90 @@ class ChatController extends Controller
     {
         $validated = $request->validate([
             'message_key' => 'required|string',
-            'to_jid' => 'required|string',
+            'target_conversa_id' => 'required|exists:conversas,id',
         ]);
 
         try {
-            if (!$this->whatsapp->isBaileysAvailable()) {
-                return response()->json(['error' => 'Funcionalidade requer Baileys'], 400);
+            $targetConversa = Conversa::findOrFail($validated['target_conversa_id']);
+            $toJid = $targetConversa->chat->chat_id ?? ($targetConversa->cliente_numero . '@s.whatsapp.net');
+
+            // Buscar a mensagem original
+            $originalMessage = Message::where('message_key', $validated['message_key'])
+                ->orWhere('message_key', 'like', '%' . $validated['message_key'])
+                ->first();
+
+            if (!$originalMessage) {
+                return response()->json(['error' => 'Mensagem não encontrada'], 404);
             }
 
-            $fromJid = $conversa->chat->chat_id ?? ($conversa->cliente_numero . '@s.whatsapp.net');
+            // Preparar texto para encaminhar
+            $forwardText = '';
+            $result = null;
 
-            $result = $this->whatsapp->forwardMessage(
-                $fromJid,
-                $validated['to_jid'],
-                $validated['message_key'],
-                Auth::id()
-            );
+            if ($originalMessage->message_type === 'text') {
+                $forwardText = '↪️ ' . $originalMessage->message_text;
+                $result = $this->evolution->sendText(
+                    $conversa->account->session_name,
+                    $toJid,
+                    $forwardText
+                );
+            } elseif (in_array($originalMessage->message_type, ['image', 'video', 'audio', 'document'])) {
+                $forwardText = '↪️ [' . ucfirst($originalMessage->message_type) . ' encaminhado]';
+                if ($originalMessage->message_text) {
+                    $forwardText .= "\n" . $originalMessage->message_text;
+                }
+                $result = $this->evolution->sendText(
+                    $conversa->account->session_name,
+                    $toJid,
+                    $forwardText
+                );
+            } else {
+                return response()->json(['error' => 'Tipo de mensagem não suportado'], 400);
+            }
 
-            return response()->json(['success' => $result['success']]);
+            // Salvar mensagem encaminhada no banco
+            $ownerJid = $conversa->account->owner_jid
+                ?? (preg_replace('/\D/', '', $conversa->account->phone_number) . '@s.whatsapp.net');
+
+            $messageKey = $result['data']['key']['id'] ?? ('fwd_' . time() . '_' . uniqid());
+
+            // Garantir que o chat de destino existe
+            $targetChat = $targetConversa->chat;
+            if (!$targetChat) {
+                $targetChat = Chat::firstOrCreate(
+                    ['chat_id' => $toJid, 'account_id' => $conversa->account->id],
+                    ['chat_type' => 'individual']
+                );
+                $targetConversa->update(['chat_id' => $targetChat->id]);
+            }
+
+            $newMessage = Message::create([
+                'chat_id' => $targetChat->id,
+                'message_key' => $messageKey,
+                'from_jid' => $ownerJid,
+                'to_jid' => $toJid,
+                'message_text' => $forwardText,
+                'message_type' => 'text',
+                'is_from_me' => true,
+                'sent_by_user_id' => Auth::id(),
+                'timestamp' => time(),
+                'status' => 'sent',
+            ]);
+
+            // Atualizar timestamp da conversa de destino
+            $targetConversa->update(['ultima_msg_em' => now()]);
+
+            return response()->json([
+                'success' => true,
+                'message' => [
+                    'id' => $newMessage->id,
+                    'message_key' => $newMessage->message_key,
+                    'message_text' => $newMessage->message_text,
+                    'message_type' => 'text',
+                    'is_from_me' => true,
+                    'created_at' => $newMessage->created_at->format('H:i'),
+                ],
+            ]);
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
@@ -656,36 +859,49 @@ class ChatController extends Controller
     /**
      * Buscar mensagens de uma conversa
      */
-    public function mensagens(Conversa $conversa)
+    public function mensagens(Request $request, Conversa $conversa)
     {
         if (!$conversa->chat) {
             return response()->json(['messages' => []]);
         }
 
-        $messages = $conversa->chat->messages()
-            ->orderBy('timestamp', 'desc')
-            ->limit(500)
-            ->get()
-            ->reverse() // Inverte para mostrar em ordem cronológica (antigas primeiro)
-            ->map(function ($msg) {
-                return [
-                    'id' => $msg->id,
-                    'message_key' => $msg->message_key,
-                    'message_text' => $msg->message_text,
-                    'message_type' => $msg->message_type,
-                    'is_from_me' => $msg->is_from_me,
-                    'is_deleted' => $msg->is_deleted,
-                    'is_edited' => $msg->is_edited,
-                    'media_url' => $msg->media_url,
-                    'media_filename' => $msg->media_filename,
-                    'media_duration' => $msg->media_duration,
-                    'sender_name' => $msg->sender_name,
-                    'quoted_text' => $msg->quoted_text,
-                    'reactions' => $msg->reactions,
-                    'created_at' => $msg->message_time,
-                    'message_date' => $msg->message_date,
-                ];
-            });
+        $query = $conversa->chat->messages();
+
+        // Se passou after_id, retorna apenas mensagens mais novas
+        $afterId = $request->query('after_id');
+        if ($afterId) {
+            $query->where('id', '>', $afterId);
+        }
+
+        $messages = $query
+            ->orderBy('id', $afterId ? 'asc' : 'desc')
+            ->limit($afterId ? 100 : 500)
+            ->get();
+
+        // Se não é busca incremental, inverte para ordem cronológica
+        if (!$afterId) {
+            $messages = $messages->reverse();
+        }
+
+        $messages = $messages->values()->map(function ($msg) {
+            return [
+                'id' => $msg->id,
+                'message_key' => $msg->message_key,
+                'message_text' => $msg->message_text,
+                'message_type' => $msg->message_type,
+                'is_from_me' => $msg->is_from_me,
+                'is_deleted' => $msg->is_deleted,
+                'is_edited' => $msg->is_edited,
+                'media_url' => $msg->media_url,
+                'media_filename' => $msg->media_filename,
+                'media_duration' => $msg->media_duration,
+                'sender_name' => $msg->sender_name,
+                'quoted_text' => $msg->quoted_text,
+                'reactions' => $msg->reactions,
+                'created_at' => $msg->message_time,
+                'message_date' => $msg->message_date,
+            ];
+        });
 
         return response()->json(['messages' => $messages]);
     }
@@ -703,6 +919,20 @@ class ChatController extends Controller
         if ($conversa->atendente_id) {
             \App\Models\User::where('id', $conversa->atendente_id)->decrement('conversas_ativas');
         }
+
+        return response()->json(['success' => true]);
+    }
+
+    /**
+     * Devolver conversa para fila
+     */
+    public function devolver(Conversa $conversa)
+    {
+        $conversa->update([
+            'status' => 'aguardando',
+            'atendente_id' => null,
+            'cliente_aguardando_desde' => now(),
+        ]);
 
         return response()->json(['success' => true]);
     }
@@ -776,20 +1006,45 @@ class ChatController extends Controller
                 $numeroLimpo = preg_replace('/\D/', '', $numeroReal);
                 $acceptedJids[] = $numeroLimpo . '@s.whatsapp.net';
             }
-            $acceptedJids = array_unique($acceptedJids);
 
-            // Buscar mais mensagens para compensar o filtro manual
-            $result = $this->evolution->fetchMessages(
-                $conversa->account->session_name,
-                '', // Sem filtro - vamos filtrar manualmente
-                $limit * 5 // Buscar mais para garantir
-            );
-
-            if (!$result['success']) {
-                return response()->json(['error' => $result['error'] ?? 'Erro ao buscar mensagens'], 500);
+            // Buscar aliases vinculados a este chat (LID <-> número)
+            if ($conversa->chat) {
+                $aliases = ContactAlias::where('primary_chat_id', $conversa->chat->id)
+                    ->pluck('alias_jid')
+                    ->toArray();
+                $acceptedJids = array_merge($acceptedJids, $aliases);
             }
 
-            $messages = $result['data'] ?? [];
+            $acceptedJids = array_unique($acceptedJids);
+
+            // Buscar mensagens de cada JID aceito
+            $messages = [];
+            $primaryJid = $chatJid ?: ($clienteNumero . '@s.whatsapp.net');
+
+            // Primeiro buscar do JID principal
+            $result = $this->evolution->fetchMessages(
+                $conversa->account->session_name,
+                $primaryJid,
+                $limit
+            );
+
+            if ($result['success'] && !empty($result['data'])) {
+                $messages = array_merge($messages, $result['data']);
+            }
+
+            // Se tiver aliases (LID), buscar deles também
+            foreach ($acceptedJids as $jid) {
+                if ($jid !== $primaryJid && strpos($jid, '@lid') !== false) {
+                    $aliasResult = $this->evolution->fetchMessages(
+                        $conversa->account->session_name,
+                        $jid,
+                        $limit
+                    );
+                    if ($aliasResult['success'] && !empty($aliasResult['data'])) {
+                        $messages = array_merge($messages, $aliasResult['data']);
+                    }
+                }
+            }
             $imported = 0;
             $skipped = 0;
             $wrongChat = 0;
@@ -810,8 +1065,10 @@ class ChatController extends Controller
                     continue;
                 }
 
-                // Verificar se já existe
-                if (Message::where('message_key', $messageId)->exists()) {
+                // Verificar se já existe (ID pode ser parcial ou com prefixo diferente)
+                if (Message::where('message_key', $messageId)
+                    ->orWhere('message_key', 'like', '%' . $messageId)
+                    ->exists()) {
                     $skipped++;
                     continue;
                 }

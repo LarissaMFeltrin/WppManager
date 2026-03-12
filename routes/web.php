@@ -33,8 +33,10 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::resource('empresas', EmpresaController::class)->except(['show']);
 
     // WhatsApp Accounts
+    Route::get('whatsapp/status/check', [WhatsappAccountController::class, 'checkStatus'])->name('whatsapp.check-status');
     Route::resource('whatsapp', WhatsappAccountController::class)->except(['show']);
     Route::post('whatsapp/{whatsapp}/disconnect', [WhatsappAccountController::class, 'disconnect'])->name('whatsapp.disconnect');
+    Route::post('whatsapp/{whatsapp}/restart', [WhatsappAccountController::class, 'restart'])->name('whatsapp.restart');
     Route::get('whatsapp/{whatsapp}/qrcode', [WhatsappAccountController::class, 'qrcode'])->name('whatsapp.qrcode');
 
     // Conversas
@@ -48,9 +50,11 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::get('chat', [ChatController::class, 'index'])->name('chat');
     Route::post('chat/{conversa}/enviar', [ChatController::class, 'enviar'])->name('chat.enviar');
     Route::get('fila', [ChatController::class, 'fila'])->name('fila');
+    Route::get('fila/dados', [ChatController::class, 'filaDados'])->name('fila.dados');
 
     // Painel de Conversas (Dashboard de Atendimento)
     Route::get('painel', [ChatController::class, 'painel'])->name('painel');
+    Route::post('painel/nova-conversa', [ChatController::class, 'novaConversa'])->name('painel.nova-conversa');
     Route::post('painel/{conversa}/enviar', [ChatController::class, 'enviarAjax'])->name('painel.enviar');
     Route::get('painel/{conversa}/mensagens', [ChatController::class, 'mensagens'])->name('painel.mensagens');
     Route::post('painel/{conversa}/finalizar', [ChatController::class, 'finalizarAjax'])->name('painel.finalizar');
@@ -68,6 +72,7 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::post('painel/{conversa}/encaminhar', [ChatController::class, 'encaminhar'])->name('painel.encaminhar');
     Route::post('painel/{conversa}/marcar-lido', [ChatController::class, 'marcarLido'])->name('painel.marcar-lido');
     Route::post('painel/{conversa}/digitando', [ChatController::class, 'digitando'])->name('painel.digitando');
+    Route::post('painel/{conversa}/devolver', [ChatController::class, 'devolver'])->name('painel.devolver');
 
     // Sincronização de histórico
     Route::post('painel/{conversa}/sincronizar-historico', [ChatController::class, 'sincronizarHistorico'])->name('painel.sincronizar-historico');
@@ -78,10 +83,18 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::get('monitor', [MonitorController::class, 'index'])->name('monitor');
     Route::get('supervisao', [MonitorController::class, 'supervisao'])->name('supervisao');
     Route::get('historico', [MonitorController::class, 'historico'])->name('historico');
+    Route::get('saude', [MonitorController::class, 'saude'])->name('saude');
 
     // Contatos
     Route::get('contatos', [ContactController::class, 'index'])->name('contatos.index');
     Route::get('contatos/sincronizar', [ContactController::class, 'sincronizarPage'])->name('contatos.sincronizar.page');
+    Route::get('contatos/duplicados', [ContactController::class, 'duplicados'])->name('contatos.duplicados');
+    Route::get('contatos/chats-sem-contato', [ContactController::class, 'chatsSemContato'])->name('contatos.chats-sem-contato');
+    Route::post('contatos/criar-do-chat', [ContactController::class, 'criarDoChat'])->name('contatos.criar-do-chat');
+    Route::post('contatos/mesclar', [ContactController::class, 'mesclarChats'])->name('contatos.mesclar');
+    Route::post('contatos/mesclar-chats', [ContactController::class, 'mesclarChats'])->name('contatos.mesclar-chats');
+    Route::post('contatos/atualizar-chat', [ContactController::class, 'atualizarChat'])->name('contatos.atualizar-chat');
+    Route::get('contatos/buscar-chats', [ContactController::class, 'buscarChats'])->name('contatos.buscar-chats');
     Route::get('contatos/{contact}/edit', [ContactController::class, 'edit'])->name('contatos.edit');
     Route::put('contatos/{contact}', [ContactController::class, 'update'])->name('contatos.update');
     Route::post('contatos/sincronizar', [ContactController::class, 'sincronizar'])->name('contatos.sincronizar');

@@ -69,7 +69,7 @@
     </div>
     @if($empresas->hasPages())
     <div class="card-footer">
-        {{ $empresas->links() }}
+        {{ $empresas->links('pagination::bootstrap-4') }}
     </div>
     @endif
 </div>

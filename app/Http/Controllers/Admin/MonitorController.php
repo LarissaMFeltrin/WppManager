@@ -3,11 +3,17 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Chat;
+use App\Models\Contact;
+use App\Models\ContactAlias;
 use App\Models\Conversa;
 use App\Models\Message;
 use App\Models\User;
 use App\Models\WhatsappAccount;
+use App\Services\EvolutionApiService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 
 class MonitorController extends Controller
 {
@@ -204,5 +210,139 @@ class MonitorController extends Controller
         $conversas = $query->orderBy('created_at', 'desc')->paginate(20)->withQueryString();
 
         return view('admin.monitor.historico', compact('stats', 'atendentes', 'conversas'));
+    }
+
+    /**
+     * Página de Saúde do Sistema - Erros, Alertas e Diagnósticos
+     */
+    public function saude()
+    {
+        $user = Auth::user();
+        $empresaId = $user->empresa_id;
+
+        // Instâncias e seus status na Evolution API
+        $instancias = WhatsappAccount::where('empresa_id', $empresaId)->get();
+        $evolution = app(EvolutionApiService::class);
+
+        $statusInstancias = [];
+        foreach ($instancias as $instancia) {
+            try {
+                $result = $evolution->getConnectionState($instancia->session_name);
+                $state = $result['data']['instance']['state'] ?? $result['data']['state'] ?? 'unknown';
+                $statusInstancias[] = [
+                    'nome' => $instancia->session_name,
+                    'db_connected' => $instancia->is_connected,
+                    'api_status' => $state,
+                    'ok' => $state === 'open',
+                ];
+            } catch (\Exception $e) {
+                $statusInstancias[] = [
+                    'nome' => $instancia->session_name,
+                    'db_connected' => $instancia->is_connected,
+                    'api_status' => 'error: ' . $e->getMessage(),
+                    'ok' => false,
+                ];
+            }
+        }
+
+        // Ler últimos erros do log
+        $errosRecentes = [];
+        $logPath = storage_path('logs/laravel.log');
+        if (File::exists($logPath)) {
+            $logContent = File::get($logPath);
+            // Pegar últimas 500KB do arquivo
+            if (strlen($logContent) > 500000) {
+                $logContent = substr($logContent, -500000);
+            }
+
+            // Extrair erros e warnings
+            preg_match_all('/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \w+\.(ERROR|WARNING):\s*([^\n]+)/', $logContent, $matches, PREG_SET_ORDER);
+
+            $errosRecentes = collect($matches)
+                ->reverse()
+                ->take(30)
+                ->map(function ($match) {
+                    return [
+                        'data' => $match[1],
+                        'tipo' => $match[2],
+                        'mensagem' => substr($match[3], 0, 200),
+                    ];
+                })
+                ->values()
+                ->toArray();
+        }
+
+        // Alertas do sistema
+        $alertas = [];
+
+        // Verificar instâncias desconectadas
+        $desconectadas = $instancias->where('is_connected', false)->count();
+        if ($desconectadas > 0) {
+            $alertas[] = [
+                'tipo' => 'danger',
+                'icone' => 'fas fa-plug',
+                'titulo' => 'Instâncias Desconectadas',
+                'mensagem' => "{$desconectadas} instância(s) desconectada(s)",
+            ];
+        }
+
+        // Verificar conversas aguardando há muito tempo
+        $aguardandoMuito = Conversa::where('status', 'aguardando')
+            ->where('created_at', '<', now()->subMinutes(30))
+            ->count();
+        if ($aguardandoMuito > 0) {
+            $alertas[] = [
+                'tipo' => 'warning',
+                'icone' => 'fas fa-clock',
+                'titulo' => 'Clientes Aguardando',
+                'mensagem' => "{$aguardandoMuito} conversa(s) aguardando há mais de 30 minutos",
+            ];
+        }
+
+        // Verificar chats sem contato
+        $chatsSemContato = Chat::whereNotIn('id', function ($q) {
+                $q->select('chat_id')->from('conversas');
+            })
+            ->where('chat_type', 'individual')
+            ->where('created_at', '>', now()->subDays(7))
+            ->count();
+        if ($chatsSemContato > 5) {
+            $alertas[] = [
+                'tipo' => 'info',
+                'icone' => 'fas fa-user-slash',
+                'titulo' => 'Chats sem Conversa',
+                'mensagem' => "{$chatsSemContato} chats recentes sem conversa ativa",
+            ];
+        }
+
+        // Verificar erros recentes
+        $errosHoje = collect($errosRecentes)->filter(function ($e) {
+            return strpos($e['data'], date('Y-m-d')) === 0 && $e['tipo'] === 'ERROR';
+        })->count();
+        if ($errosHoje > 10) {
+            $alertas[] = [
+                'tipo' => 'danger',
+                'icone' => 'fas fa-exclamation-triangle',
+                'titulo' => 'Muitos Erros',
+                'mensagem' => "{$errosHoje} erros no log hoje",
+            ];
+        }
+
+        // Estatísticas gerais
+        $stats = [
+            'total_chats' => Chat::count(),
+            'total_contatos' => Contact::count(),
+            'total_mensagens' => Message::count(),
+            'total_aliases' => ContactAlias::count(),
+            'mensagens_hoje' => Message::whereDate('created_at', today())->count(),
+            'conversas_hoje' => Conversa::whereDate('created_at', today())->count(),
+        ];
+
+        return view('admin.monitor.saude', compact(
+            'statusInstancias',
+            'errosRecentes',
+            'alertas',
+            'stats'
+        ));
     }
 }

@@ -216,7 +216,7 @@
     </div>
     @if($logs->hasPages())
     <div class="card-footer">
-        {{ $logs->links() }}
+        {{ $logs->links('pagination::bootstrap-4') }}
     </div>
     @endif
 </div>

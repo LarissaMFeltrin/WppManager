@@ -144,7 +144,7 @@
     </div>
     @if($conversas->hasPages())
     <div class="card-footer">
-        {{ $conversas->appends(request()->query())->links() }}
+        {{ $conversas->appends(request()->query())->links('pagination::bootstrap-4') }}
     </div>
     @endif
 </div>

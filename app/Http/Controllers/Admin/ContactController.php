@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Contact;
+use App\Models\ContactAlias;
+use App\Models\Conversa;
 use App\Models\WhatsappAccount;
+use App\Services\ChatMergeService;
 use App\Services\EvolutionApiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -33,7 +36,16 @@ class ContactController extends Controller
             $query->where('account_id', $request->account_id);
         }
 
-        $contacts = $query->orderBy('name')->paginate(30);
+        // Filtro para contatos sem nome
+        if ($request->filter === 'sem_nome') {
+            $query->where(function ($q) {
+                $q->whereNull('name')
+                    ->orWhere('name', '')
+                    ->orWhere('name', 'Sem nome');
+            });
+        }
+
+        $contacts = $query->orderBy('name')->paginate(30)->withQueryString();
 
         $accounts = WhatsappAccount::whereIn('id', $accountIds)->orderBy('session_name')->get();
 
@@ -124,8 +136,18 @@ class ContactController extends Controller
                     continue;
                 }
 
-                // Extrair número do jid (remover @s.whatsapp.net)
+                // Ignorar grupos (@g.us) e status (@broadcast)
+                if (str_contains($jid, '@g.us') || str_contains($jid, '@broadcast')) {
+                    continue;
+                }
+
+                // Extrair número do jid (remover @s.whatsapp.net ou @lid)
                 $phoneNumber = preg_replace('/@.*$/', '', $jid);
+
+                // Limitar tamanho do phone_number (máx 50 caracteres)
+                if (strlen($phoneNumber) > 50) {
+                    $phoneNumber = substr($phoneNumber, 0, 50);
+                }
 
                 Contact::updateOrCreate(
                     [
@@ -174,5 +196,253 @@ class ContactController extends Controller
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * Criar contato a partir de um chat existente
+     */
+    public function criarDoChat(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|exists:chats,id',
+        ]);
+
+        $chat = Chat::findOrFail($validated['chat_id']);
+
+        // Verificar se pertence à empresa do usuário
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id')->toArray();
+
+        if (!in_array($chat->account_id, $accountIds)) {
+            return back()->with('error', 'Acesso negado');
+        }
+
+        // Extrair número do JID
+        $phoneNumber = preg_replace('/@.*$/', '', $chat->chat_id);
+        if (strlen($phoneNumber) > 50) {
+            $phoneNumber = substr($phoneNumber, 0, 50);
+        }
+
+        Contact::updateOrCreate(
+            [
+                'account_id' => $chat->account_id,
+                'jid' => $chat->chat_id,
+            ],
+            [
+                'name' => $chat->chat_name ?: 'Sem nome',
+                'phone_number' => $phoneNumber,
+            ]
+        );
+
+        return back()->with('success', "Contato criado para '{$chat->chat_name}'!");
+    }
+
+    /**
+     * Listar chats individuais que não possuem contato associado
+     */
+    public function chatsSemContato()
+    {
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
+
+        $chats = Chat::whereIn('account_id', $accountIds)
+            ->where('chat_type', 'individual')
+            ->whereNotExists(function ($q) {
+                $q->select('id')
+                    ->from('contacts')
+                    ->whereColumn('contacts.jid', 'chats.chat_id')
+                    ->whereColumn('contacts.account_id', 'chats.account_id');
+            })
+            ->with('account')
+            ->withCount('messages')
+            ->orderByDesc('last_message_timestamp')
+            ->paginate(30);
+
+        $accounts = WhatsappAccount::whereIn('id', $accountIds)->pluck('session_name', 'id');
+
+        return view('admin.contacts.chats-sem-contato', compact('chats', 'accounts'));
+    }
+
+    /**
+     * Listar chats duplicados (possíveis mesmo contato com JIDs diferentes)
+     */
+    public function duplicados()
+    {
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
+
+        // Buscar chats com mesmo nome (possíveis duplicados)
+        $duplicados = Chat::whereIn('account_id', $accountIds)
+            ->where('chat_type', 'individual')
+            ->whereNotNull('chat_name')
+            ->where('chat_name', '!=', '')
+            ->select('chat_name', 'account_id')
+            ->selectRaw('COUNT(*) as count')
+            ->selectRaw('GROUP_CONCAT(id ORDER BY last_message_timestamp DESC) as chat_ids')
+            ->groupBy('chat_name', 'account_id')
+            ->having('count', '>', 1)
+            ->get()
+            ->map(function ($item) {
+                $chatIds = explode(',', $item->chat_ids);
+                $chats = Chat::whereIn('id', $chatIds)
+                    ->withCount('messages')
+                    ->orderByDesc('last_message_timestamp')
+                    ->get();
+
+                return [
+                    'name' => $item->chat_name,
+                    'account_id' => $item->account_id,
+                    'chats' => $chats,
+                ];
+            });
+
+        $accounts = WhatsappAccount::whereIn('id', $accountIds)->pluck('session_name', 'id');
+
+        return view('admin.contacts.duplicados', compact('duplicados', 'accounts'));
+    }
+
+    /**
+     * Mesclar dois chats em um (move mensagens e conversas)
+     */
+    public function mesclarChats(Request $request)
+    {
+        $validated = $request->validate([
+            'primary_chat_id' => 'required|exists:chats,id',
+            'secondary_chat_id' => 'required|exists:chats,id|different:primary_chat_id',
+        ]);
+
+        $primaryChat = Chat::findOrFail($validated['primary_chat_id']);
+        $secondaryChat = Chat::findOrFail($validated['secondary_chat_id']);
+
+        // Verificar se pertencem à mesma empresa
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id')->toArray();
+
+        if (!in_array($primaryChat->account_id, $accountIds) || !in_array($secondaryChat->account_id, $accountIds)) {
+            return back()->with('error', 'Acesso negado');
+        }
+
+        $mergeService = app(ChatMergeService::class);
+
+        if ($mergeService->mergeChats($primaryChat, $secondaryChat)) {
+            $message = "Chats mesclados! As mensagens de '{$secondaryChat->chat_id}' foram movidas para '{$primaryChat->chat_id}'";
+
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json(['success' => true, 'message' => $message]);
+            }
+
+            return back()->with('success', $message);
+        }
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json(['error' => 'Erro ao mesclar chats'], 500);
+        }
+
+        return back()->with('error', 'Erro ao mesclar chats');
+    }
+
+    /**
+     * Atualizar nome e número do chat/contato
+     */
+    public function atualizarChat(Request $request)
+    {
+        $validated = $request->validate([
+            'chat_id' => 'required|exists:chats,id',
+            'nome' => 'required|string|max:255',
+            'numero' => 'nullable|string|max:50',
+        ]);
+
+        $chat = Chat::findOrFail($validated['chat_id']);
+
+        // Verificar se pertence à empresa do usuário
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id')->toArray();
+
+        if (!in_array($chat->account_id, $accountIds)) {
+            return response()->json(['error' => 'Acesso negado'], 403);
+        }
+
+        $oldJid = $chat->chat_id;
+        $newJid = $validated['numero'] ? $validated['numero'] . '@s.whatsapp.net' : null;
+
+        // Atualizar chat
+        $chat->update(['chat_name' => $validated['nome']]);
+
+        // Se mudou o número, atualizar JID e criar alias
+        if ($newJid && $newJid !== $oldJid) {
+            // Verificar se já existe um chat com o novo JID
+            $existingChat = Chat::where('account_id', $chat->account_id)
+                ->where('chat_id', $newJid)
+                ->where('id', '!=', $chat->id)
+                ->first();
+
+            if ($existingChat) {
+                // Mesclar com o chat existente
+                $mergeService = app(ChatMergeService::class);
+                $mergeService->mergeChats($existingChat, $chat);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => "Chat mesclado com o número {$validated['numero']}!",
+                    'merged' => true,
+                ]);
+            }
+
+            // Atualizar o JID
+            $chat->update(['chat_id' => $newJid]);
+
+            // Criar alias para o JID antigo
+            ContactAlias::updateOrCreate(
+                ['account_id' => $chat->account_id, 'alias_jid' => $oldJid],
+                ['primary_chat_id' => $chat->id]
+            );
+        }
+
+        // Atualizar ou criar contato
+        Contact::updateOrCreate(
+            ['account_id' => $chat->account_id, 'jid' => $chat->chat_id],
+            [
+                'name' => $validated['nome'],
+                'phone_number' => $validated['numero'] ?? preg_replace('/@.*$/', '', $chat->chat_id),
+            ]
+        );
+
+        // Atualizar conversas associadas ao chat
+        Conversa::where('chat_id', $chat->id)->update([
+            'cliente_nome' => $validated['nome'],
+            'cliente_numero' => $validated['numero'] ?? preg_replace('/@.*$/', '', $chat->chat_id),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contato atualizado!',
+        ]);
+    }
+
+    /**
+     * Buscar chats para merge
+     */
+    public function buscarChats(Request $request)
+    {
+        $termo = $request->input('termo', '');
+
+        if (strlen($termo) < 2) {
+            return response()->json(['chats' => []]);
+        }
+
+        $user = Auth::user();
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
+
+        $chats = Chat::whereIn('account_id', $accountIds)
+            ->where('chat_type', 'individual')
+            ->where(function ($q) use ($termo) {
+                $q->where('chat_name', 'like', "%{$termo}%")
+                    ->orWhere('chat_id', 'like', "%{$termo}%");
+            })
+            ->orderByDesc('last_message_timestamp')
+            ->take(10)
+            ->get(['id', 'chat_id', 'chat_name']);
+
+        return response()->json(['chats' => $chats]);
     }
 }

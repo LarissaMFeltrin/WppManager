@@ -152,6 +152,9 @@
     </div>
 
     <form action="" method="GET" class="filtros-bar">
+        @if(request('filter'))
+            <input type="hidden" name="filter" value="{{ request('filter') }}">
+        @endif
         <div class="search-box">
             <i class="fas fa-search"></i>
             <input type="text" name="search" class="form-control"
@@ -173,8 +176,27 @@
         <a href="{{ route('admin.contatos.index') }}" class="btn btn-light">
             <i class="fas fa-times"></i> Limpar
         </a>
+        <a href="{{ route('admin.contatos.sincronizar.page') }}" class="btn btn-info ml-3">
+            <i class="fas fa-sync"></i> Sincronizar
+        </a>
+        <a href="{{ route('admin.contatos.duplicados') }}" class="btn btn-warning ml-2">
+            <i class="fas fa-users"></i> Duplicados
+        </a>
     </form>
 </div>
+
+{{-- Indicador de filtro ativo --}}
+@if(request('filter') === 'sem_nome')
+<div class="alert alert-warning d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <i class="fas fa-filter"></i>
+        <strong>Filtro ativo:</strong> Mostrando apenas contatos sem nome
+    </div>
+    <a href="{{ route('admin.contatos.index') }}" class="btn btn-sm btn-light">
+        <i class="fas fa-times"></i> Remover filtro
+    </a>
+</div>
+@endif
 
 {{-- Tabela de Contatos --}}
 @if($contacts->count() > 0)
@@ -221,7 +243,7 @@
 
     @if($contacts->hasPages())
     <div class="card-footer d-flex justify-content-center">
-        {{ $contacts->appends(request()->query())->links() }}
+        {{ $contacts->appends(request()->query())->links('pagination::bootstrap-4') }}
     </div>
     @endif
 </div>

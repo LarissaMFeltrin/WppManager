@@ -73,6 +73,7 @@
     border-radius: 8px 8px 0 0;
     display: flex;
     align-items: center;
+    position: relative;
     gap: 10px;
     border-bottom: 1px solid #ddd;
 }
@@ -309,11 +310,11 @@
 
 /* Context Menu */
 .message-context-menu {
-    position: absolute;
+    position: fixed;
     background: white;
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-    z-index: 1000;
+    z-index: 9998;
     min-width: 150px;
     display: none;
 }
@@ -342,15 +343,13 @@
 
 /* Emoji Picker */
 .emoji-picker {
-    position: absolute;
-    bottom: 100%;
-    left: 0;
+    position: fixed;
     background: white;
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.2);
     padding: 10px;
     display: none;
-    z-index: 1000;
+    z-index: 9999;
 }
 
 .emoji-picker.show {
@@ -358,9 +357,10 @@
 }
 
 .emoji-picker .emoji-grid {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
+    display: flex;
+    flex-wrap: wrap;
     gap: 5px;
+    max-width: 280px;
 }
 
 .emoji-picker .emoji {
@@ -587,6 +587,7 @@
     background: rgba(0,0,0,0.9);
     z-index: 2000;
     display: none;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
 }
@@ -597,16 +598,233 @@
 
 .image-modal img {
     max-width: 90%;
-    max-height: 90%;
+    max-height: 85%;
 }
 
-.image-modal .close-modal {
+.image-modal-toolbar {
     position: absolute;
-    top: 20px;
-    right: 30px;
+    top: 15px;
+    right: 15px;
+    display: flex;
+    gap: 10px;
+}
+
+/* Timer de espera do cliente */
+.waiting-timer {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: #dc3545;
     color: white;
-    font-size: 2rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    animation: pulse 1s infinite;
+}
+
+.chat-column.cliente-aguardando {
+    border-color: #dc3545 !important;
+    animation: borderPulse 1s infinite;
+}
+
+@keyframes borderPulse {
+    0%, 100% { box-shadow: 0 0 5px rgba(220, 53, 69, 0.5); }
+    50% { box-shadow: 0 0 15px rgba(220, 53, 69, 0.8); }
+}
+
+/* Paste preview */
+.paste-preview-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 2001;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.paste-preview-modal.show {
+    display: flex;
+}
+
+.paste-preview-content {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    max-width: 400px;
+}
+
+.paste-preview-content img {
+    max-width: 100%;
+    max-height: 300px;
+    margin-bottom: 15px;
+    border-radius: 5px;
+}
+
+/* Sidebar da Fila */
+.fila-sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 1040;
+    display: none;
+}
+
+.fila-sidebar-overlay.show {
+    display: block;
+}
+
+.fila-sidebar {
+    position: fixed;
+    top: 0;
+    right: -400px;
+    width: 400px;
+    height: 100vh;
+    background: #f4f6f9;
+    z-index: 1050;
+    box-shadow: -4px 0 15px rgba(0,0,0,0.15);
+    transition: right 0.3s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.fila-sidebar.show {
+    right: 0;
+}
+
+.fila-sidebar-header {
+    background: #ffc107;
+    color: #212529;
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.fila-sidebar-header h5 {
+    margin: 0;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.fila-sidebar-header .badge {
+    font-size: 0.9rem;
+}
+
+.fila-sidebar-header .close-btn {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
     cursor: pointer;
+    color: #212529;
+    padding: 0;
+    line-height: 1;
+}
+
+.fila-sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+}
+
+.fila-sidebar-item {
+    background: #fff;
+    border-radius: 8px;
+    padding: 12px 15px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-left: 4px solid #ffc107;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.fila-sidebar-item .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: #fff;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.fila-sidebar-item .avatar.color-1 { background: #25d366; }
+.fila-sidebar-item .avatar.color-2 { background: #128c7e; }
+.fila-sidebar-item .avatar.color-3 { background: #075e54; }
+.fila-sidebar-item .avatar.color-4 { background: #34b7f1; }
+.fila-sidebar-item .avatar.color-5 { background: #00a884; }
+
+.fila-sidebar-item .info {
+    flex: 1;
+    min-width: 0;
+}
+
+.fila-sidebar-item .info .nome {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fila-sidebar-item .info .numero {
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+.fila-sidebar-item .info .preview {
+    font-size: 0.8rem;
+    color: #6c757d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 3px;
+}
+
+.fila-sidebar-item .info .tempo {
+    font-size: 0.75rem;
+    color: #dc3545;
+    margin-top: 3px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.fila-sidebar-item .btn-pegar {
+    flex-shrink: 0;
+}
+
+.fila-sidebar-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #6c757d;
+}
+
+.fila-sidebar-empty i {
+    font-size: 3rem;
+    color: #28a745;
+    margin-bottom: 15px;
+}
+
+.fila-sidebar-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: #6c757d;
 }
 
 </style>
@@ -623,12 +841,15 @@
         </div>
     </div>
     <div class="actions">
+        <button class="btn btn-success btn-sm" id="btnNovaConversa">
+            <i class="fas fa-plus"></i> Nova Conversa
+        </button>
         <button class="btn btn-danger btn-sm" id="btnFinalizarTodas" {{ $slotsUsados == 0 ? 'disabled' : '' }}>
             <i class="fas fa-times-circle"></i> Finalizar Todas
         </button>
-        <a href="{{ route('admin.fila') }}" class="btn btn-warning btn-sm">
-            <i class="fas fa-users"></i> Fila <span class="badge badge-light">{{ $filaCount }}</span>
-        </a>
+        <button class="btn btn-warning btn-sm" id="btnFilaSidebar">
+            <i class="fas fa-users"></i> Fila <span class="badge badge-light" id="filaCountBadge">{{ $filaCount }}</span>
+        </button>
         <button class="btn btn-light btn-sm" id="btnRefresh">
             <i class="fas fa-sync-alt"></i>
         </button>
@@ -640,8 +861,22 @@
     @foreach($conversas as $index => $conversa)
     @php
         $isGroup = $conversa->chat && $conversa->chat->chat_type === 'group';
+        // Calcular se cliente está aguardando resposta
+        // As mensagens vêm ordenadas DESC (mais recente primeiro)
+        $lastClientMsgTime = null;
+        if ($conversa->chat && $conversa->chat->messages->count() > 0) {
+            $lastMsg = $conversa->chat->messages->first(); // Mais recente
+            // Se a última mensagem NÃO é minha E tem mensagens não lidas, cliente está aguardando
+            // Se unread_count = 0, foi marcado como lido e não deve mostrar timer
+            if (!$lastMsg->is_from_me && ($conversa->chat->unread_count ?? 0) > 0) {
+                $lastClientMsgTime = $lastMsg->timestamp;
+            }
+        }
     @endphp
-    <div class="chat-column" data-conversa-id="{{ $conversa->id }}" data-is-group="{{ $isGroup ? '1' : '0' }}">
+    <div class="chat-column {{ $lastClientMsgTime ? 'cliente-aguardando' : '' }}"
+         data-conversa-id="{{ $conversa->id }}"
+         data-is-group="{{ $isGroup ? '1' : '0' }}"
+         data-last-client-msg="{{ $lastClientMsgTime }}">
         {{-- Header --}}
         <div class="chat-column-header">
             <div class="avatar color-{{ ($index % 5) + 1 }}">
@@ -675,9 +910,25 @@
                         <a class="dropdown-item btn-baixar-midias" href="#" data-id="{{ $conversa->id }}">
                             <i class="fas fa-download text-info"></i> Baixar midias
                         </a>
+                        <a class="dropdown-item btn-editar-contato" href="#"
+                           data-id="{{ $conversa->id }}"
+                           data-chat-id="{{ $conversa->chat?->id }}"
+                           data-nome="{{ $conversa->chat?->chat_name }}"
+                           data-jid="{{ $conversa->chat?->chat_id }}"
+                           data-numero="{{ $conversa->cliente_numero }}">
+                            <i class="fas fa-user-edit text-primary"></i> Editar Contato
+                        </a>
+                        <a class="dropdown-item btn-mesclar-chat" href="#"
+                           data-chat-id="{{ $conversa->chat?->id }}"
+                           data-nome="{{ $conversa->chat?->chat_name }}">
+                            <i class="fas fa-compress-arrows-alt text-warning"></i> Mesclar Chat
+                        </a>
                         <div class="dropdown-divider"></div>
                         <a class="dropdown-item btn-marcar-lido" href="#" data-id="{{ $conversa->id }}">
                             <i class="fas fa-check-double text-primary"></i> Marcar como lido
+                        </a>
+                        <a class="dropdown-item btn-devolver" href="#" data-id="{{ $conversa->id }}">
+                            <i class="fas fa-undo text-warning"></i> Devolver p/ Fila
                         </a>
                         <a class="dropdown-item btn-finalizar" href="#" data-id="{{ $conversa->id }}">
                             <i class="fas fa-check text-success"></i> Finalizar
@@ -707,6 +958,7 @@
                     @php $lastDate = $currentDate; @endphp
                 @endif
                 <div class="message {{ $msg->is_from_me ? 'sent' : 'received' }}"
+                     data-msg-id="{{ $msg->id }}"
                      data-message-key="{{ $msg->message_key }}"
                      data-message-text="{{ $msg->message_text }}">
                     <div class="message-bubble">
@@ -868,23 +1120,229 @@
 <div class="message-context-menu" id="contextMenu">
     <div class="menu-item" onclick="replyToMessage()"><i class="fas fa-reply"></i> Responder</div>
     <div class="menu-item" onclick="showEmojiPicker()"><i class="far fa-smile"></i> Reagir</div>
+    <div class="menu-item" onclick="copyMessageText()"><i class="fas fa-copy"></i> Copiar</div>
+    <div class="menu-item" onclick="forwardMessage()"><i class="fas fa-share"></i> Encaminhar</div>
     <div class="menu-item menu-edit" onclick="editMessage()"><i class="fas fa-edit"></i> Editar</div>
     <div class="menu-item menu-delete" onclick="deleteMessage()"><i class="fas fa-trash"></i> Apagar</div>
 </div>
 
+{{-- Forward Modal --}}
+<div class="modal fade" id="forwardModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Encaminhar para</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="list-group" id="forwardTargets">
+                    @foreach($conversas as $conv)
+                    <a href="#" class="list-group-item list-group-item-action forward-target"
+                       data-conversa-id="{{ $conv->id }}" data-nome="{{ $conv->cliente_nome }}">
+                        <i class="fas fa-user"></i> {{ $conv->cliente_nome }}
+                    </a>
+                    @endforeach
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Edit Contact Modal --}}
+<div class="modal fade" id="editContactModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-user-edit"></i> Editar Contato</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editContactChatId">
+                <input type="hidden" id="editContactConversaId">
+
+                <div class="form-group">
+                    <label>Nome do Contato</label>
+                    <input type="text" class="form-control" id="editContactNome" placeholder="Nome">
+                </div>
+
+                <div class="form-group">
+                    <label>Numero Real (WhatsApp)</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="editContactNumero" placeholder="Ex: 5544999999999">
+                        <div class="input-group-append">
+                            <span class="input-group-text">@s.whatsapp.net</span>
+                        </div>
+                    </div>
+                    <small class="text-muted">Informe apenas os numeros (codigo pais + DDD + numero)</small>
+                </div>
+
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>JID Atual:</strong> <code id="editContactJidAtual"></code>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btnSalvarContato">
+                    <i class="fas fa-save"></i> Salvar
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Merge Chat Modal --}}
+<div class="modal fade" id="mergeChatModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-compress-arrows-alt"></i> Mesclar Chat</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="mergeChatId">
+
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Mesclando: <strong id="mergeNomeAtual"></strong>
+                </div>
+
+                <p class="text-muted">
+                    Busque o chat principal para onde as mensagens serao movidas.
+                    O chat atual sera removido apos a mesclagem.
+                </p>
+
+                <div class="form-group">
+                    <label>Buscar chat por nome ou numero</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="mergeTargetJid" placeholder="Digite nome ou numero...">
+                        <div class="input-group-append">
+                            <button class="btn btn-outline-primary" type="button" id="btnBuscarMerge">
+                                <i class="fas fa-search"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="list-group" id="mergeSearchResults" style="max-height: 200px; overflow-y: auto;">
+                    <!-- Resultados da busca -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancelar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- Nova Conversa Modal --}}
+<div class="modal fade" id="novaConversaModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-plus-circle"></i> Nova Conversa</h5>
+                <button type="button" class="close" data-dismiss="modal">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Instancia</label>
+                    <select class="form-control" id="novaConversaInstancia">
+                        @foreach(\App\Models\WhatsappAccount::where('empresa_id', Auth::user()->empresa_id)->get() as $acc)
+                            <option value="{{ $acc->id }}" data-session="{{ $acc->session_name }}">{{ $acc->session_name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Numero do WhatsApp</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="novaConversaNumero" placeholder="Ex: 5544999999999">
+                        <div class="input-group-append">
+                            <span class="input-group-text">@s.whatsapp.net</span>
+                        </div>
+                    </div>
+                    <small class="text-muted">Codigo do pais + DDD + numero (sem espacos ou tracos)</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Nome do Contato (opcional)</label>
+                    <input type="text" class="form-control" id="novaConversaNome" placeholder="Nome para identificar">
+                </div>
+
+                <hr>
+
+                <div class="form-group">
+                    <label>Mensagem Inicial</label>
+                    <textarea class="form-control" id="novaConversaMensagem" rows="3" placeholder="Digite a primeira mensagem..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-success" id="btnIniciarConversa">
+                    <i class="fas fa-paper-plane"></i> Iniciar Conversa
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {{-- Emoji Picker for Reactions --}}
-<div class="emoji-picker" id="reactionPicker">
-    <div class="emoji-grid">
+<div class="emoji-picker" id="reactionPicker" style="display:none; position:fixed; z-index:99999; background:#fff; padding:15px; border-radius:10px; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+    <div class="emoji-grid" style="display:flex; gap:8px; flex-wrap:wrap;">
         @foreach(['👍','❤️','😂','😮','😢','🙏','👏','🔥','🎉','💯'] as $emoji)
-            <span class="emoji" onclick="sendReaction('{{ $emoji }}')">{{ $emoji }}</span>
+            <span class="emoji" onclick="sendReaction('{{ $emoji }}')" style="font-size:1.5rem; cursor:pointer; padding:5px;">{{ $emoji }}</span>
         @endforeach
     </div>
 </div>
 
 {{-- Image Modal --}}
 <div class="image-modal" id="imageModal" onclick="closeImageModal()">
-    <span class="close-modal">&times;</span>
-    <img src="" id="modalImage">
+    <div class="image-modal-toolbar" onclick="event.stopPropagation()">
+        <a href="#" id="downloadImageBtn" download class="btn btn-light btn-sm">
+            <i class="fas fa-download"></i> Download
+        </a>
+        <button class="btn btn-light btn-sm" onclick="closeImageModal()">
+            <i class="fas fa-times"></i> Fechar
+        </button>
+    </div>
+    <img src="" id="modalImage" onclick="event.stopPropagation()">
+</div>
+
+{{-- Paste Preview Modal --}}
+<div class="paste-preview-modal" id="pastePreviewModal">
+    <div class="paste-preview-content">
+        <h5>Enviar imagem colada?</h5>
+        <img src="" id="pastePreviewImage">
+        <input type="text" class="form-control mb-3" id="pasteCaption" placeholder="Legenda (opcional)">
+        <div class="d-flex gap-2 justify-content-center">
+            <button class="btn btn-secondary" onclick="cancelPaste()">Cancelar</button>
+            <button class="btn btn-success" onclick="confirmPaste()">Enviar</button>
+        </div>
+    </div>
+</div>
+
+{{-- Sidebar da Fila --}}
+<div class="fila-sidebar-overlay" id="filaSidebarOverlay"></div>
+<div class="fila-sidebar" id="filaSidebar">
+    <div class="fila-sidebar-header">
+        <h5>
+            <i class="fas fa-users"></i> Fila de Espera
+            <span class="badge badge-light" id="filaSidebarCount">0</span>
+        </h5>
+        <button class="close-btn" id="closeFilaSidebar">&times;</button>
+    </div>
+    <div class="fila-sidebar-body" id="filaSidebarBody">
+        <div class="fila-sidebar-loading">
+            <i class="fas fa-spinner fa-spin fa-2x"></i>
+            <p class="mt-2">Carregando...</p>
+        </div>
+    </div>
 </div>
 @stop
 
@@ -896,6 +1354,21 @@ let currentConversaId = null;
 let currentMessageElement = null;
 let mediaRecorder = null;
 let audioChunks = [];
+
+// Limpar estado de "cliente aguardando" quando enviamos mensagem
+function clearWaitingState(conversaId) {
+    var column = $('.chat-column[data-conversa-id="' + conversaId + '"]');
+    column.removeClass('cliente-aguardando');
+    column.removeAttr('data-last-client-msg');
+    column.find('.waiting-timer').remove();
+}
+
+// Atualizar estado de "cliente aguardando" quando recebemos mensagem do cliente
+function setWaitingState(conversaId, timestamp) {
+    var column = $('.chat-column[data-conversa-id="' + conversaId + '"]');
+    column.addClass('cliente-aguardando');
+    column.attr('data-last-client-msg', timestamp);
+}
 
 // Toast usando SweetAlert2
 function showToast(message, type = 'info', duration = null) {
@@ -928,11 +1401,22 @@ function showToast(message, type = 'info', duration = null) {
     });
 }
 
-$(function() {
-    // Scroll todas as mensagens para baixo
+// Função para scrollar todas as conversas para o final
+function scrollAllChatsToBottom() {
     $('.chat-messages').each(function() {
         this.scrollTop = this.scrollHeight;
     });
+}
+
+$(function() {
+    // Scroll inicial com delays progressivos para garantir renderização
+    scrollAllChatsToBottom();
+    setTimeout(scrollAllChatsToBottom, 100);
+    setTimeout(scrollAllChatsToBottom, 300);
+    setTimeout(scrollAllChatsToBottom, 500);
+
+    // Scroll novamente após imagens carregarem
+    $(window).on('load', scrollAllChatsToBottom);
 
     // Context menu nas mensagens
     $(document).on('contextmenu', '.message-bubble', function(e) {
@@ -957,11 +1441,15 @@ $(function() {
 
     // Fechar menus ao clicar fora
     $(document).on('click', function(e) {
-        if (!$(e.target).closest('.message-context-menu').length) {
-            $('#contextMenu').removeClass('show');
+        // Não fechar se clicou no menu de contexto (incluindo "Reagir")
+        if ($(e.target).closest('.message-context-menu').length) {
+            return;
         }
+
+        $('#contextMenu').removeClass('show');
+
         if (!$(e.target).closest('.emoji-picker').length && !$(e.target).hasClass('btn-emoji')) {
-            $('#reactionPicker').removeClass('show');
+            $('#reactionPicker').hide();
         }
         if (!$(e.target).closest('.attachment-menu').length && !$(e.target).hasClass('btn-attach')) {
             $('.attachment-menu').removeClass('show');
@@ -995,6 +1483,8 @@ $(function() {
                     var container = $('#messages-' + conversaId);
                     container.append(buildMessageHtml(response.message));
                     container[0].scrollTop = container[0].scrollHeight;
+                    // Limpar estado de aguardando após enviar mensagem
+                    clearWaitingState(conversaId);
                 }
                 input.val('');
                 cancelReply(conversaId);
@@ -1009,15 +1499,23 @@ $(function() {
         });
     });
 
-    // Enviar ao digitar (typing indicator)
-    var typingTimeout;
+    // Enviar ao digitar (typing indicator) - com debounce para evitar requisições excessivas
+    var typingTimeouts = {};
+    var lastTypingSent = {};
     $('.form-enviar input[name="mensagem"]').on('input', function() {
         var conversaId = $(this).closest('form').data('conversa-id');
-        clearTimeout(typingTimeout);
+        var now = Date.now();
 
-        $.post('/admin/painel/' + conversaId + '/digitando', { _token: '{{ csrf_token() }}' });
+        // Só enviar se passou mais de 2 segundos desde o último envio
+        if (!lastTypingSent[conversaId] || now - lastTypingSent[conversaId] > 2000) {
+            lastTypingSent[conversaId] = now;
+            $.post('/admin/painel/' + conversaId + '/digitando', { _token: '{{ csrf_token() }}' });
+        }
 
-        typingTimeout = setTimeout(function() {}, 3000);
+        clearTimeout(typingTimeouts[conversaId]);
+        typingTimeouts[conversaId] = setTimeout(function() {
+            lastTypingSent[conversaId] = 0;
+        }, 3000);
     });
 
     // Finalizar conversa
@@ -1025,17 +1523,75 @@ $(function() {
         e.preventDefault();
         var conversaId = $(this).data('id');
 
-        if (!confirm('Finalizar esta conversa?')) return;
+        Swal.fire({
+            title: 'Finalizar Conversa',
+            text: 'Deseja realmente finalizar esta conversa?',
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#28a745',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Sim, finalizar',
+            cancelButtonText: 'Cancelar'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                $.ajax({
+                    url: '/admin/painel/' + conversaId + '/finalizar',
+                    method: 'POST',
+                    data: { _token: '{{ csrf_token() }}' },
+                    success: function() {
+                        Swal.fire({
+                            title: 'Finalizado!',
+                            text: 'Conversa finalizada com sucesso.',
+                            icon: 'success',
+                            timer: 1500,
+                            showConfirmButton: false
+                        }).then(() => {
+                            location.reload();
+                        });
+                    },
+                    error: function() {
+                        showToast('Erro ao finalizar conversa', 'error');
+                    }
+                });
+            }
+        });
+    });
 
-        $.ajax({
-            url: '/admin/painel/' + conversaId + '/finalizar',
-            method: 'POST',
-            data: { _token: '{{ csrf_token() }}' },
-            success: function() {
-                location.reload();
-            },
-            error: function() {
-                showToast('Erro ao finalizar conversa', 'error');
+    // Devolver para fila
+    $('.btn-devolver').on('click', function(e) {
+        e.preventDefault();
+        var conversaId = $(this).data('id');
+
+        Swal.fire({
+            title: 'Devolver para Fila',
+            text: 'Deseja devolver esta conversa para a fila de espera?',
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#ffc107',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Sim, devolver',
+            cancelButtonText: 'Cancelar'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                $.ajax({
+                    url: '/admin/painel/' + conversaId + '/devolver',
+                    method: 'POST',
+                    data: { _token: '{{ csrf_token() }}' },
+                    success: function() {
+                        Swal.fire({
+                            title: 'Devolvido!',
+                            text: 'Conversa devolvida para a fila.',
+                            icon: 'success',
+                            timer: 1500,
+                            showConfirmButton: false
+                        }).then(() => {
+                            location.reload();
+                        });
+                    },
+                    error: function() {
+                        showToast('Erro ao devolver conversa', 'error');
+                    }
+                });
             }
         });
     });
@@ -1045,30 +1601,54 @@ $(function() {
         e.preventDefault();
         var conversaId = $(this).data('id');
 
-        $.post('/admin/painel/' + conversaId + '/marcar-lido', { _token: '{{ csrf_token() }}' });
+        $.post('/admin/painel/' + conversaId + '/marcar-lido', { _token: '{{ csrf_token() }}' })
+            .done(function() {
+                // Limpar estado de aguardando ao marcar como lido
+                clearWaitingState(conversaId);
+                showToast('Marcado como lido', 'success');
+            });
     });
 
     // Finalizar todas
     $('#btnFinalizarTodas').on('click', function() {
-        if (!confirm('Finalizar TODAS as conversas?')) return;
+        var total = $('.chat-column').length;
 
-        var conversas = $('.chat-column');
-        var total = conversas.length;
-        var done = 0;
+        Swal.fire({
+            title: 'Finalizar Todas',
+            html: 'Deseja finalizar <strong>' + total + ' conversas</strong>?<br><small class="text-muted">Esta acao nao pode ser desfeita.</small>',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc3545',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Sim, finalizar todas',
+            cancelButtonText: 'Cancelar'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                var conversas = $('.chat-column');
+                var done = 0;
 
-        conversas.each(function() {
-            var id = $(this).data('conversa-id');
-            $.ajax({
-                url: '/admin/painel/' + id + '/finalizar',
-                method: 'POST',
-                data: { _token: '{{ csrf_token() }}' },
-                complete: function() {
-                    done++;
-                    if (done >= total) {
-                        location.reload();
-                    }
-                }
-            });
+                Swal.fire({
+                    title: 'Finalizando...',
+                    html: 'Aguarde enquanto as conversas sao finalizadas.',
+                    allowOutsideClick: false,
+                    didOpen: () => { Swal.showLoading(); }
+                });
+
+                conversas.each(function() {
+                    var id = $(this).data('conversa-id');
+                    $.ajax({
+                        url: '/admin/painel/' + id + '/finalizar',
+                        method: 'POST',
+                        data: { _token: '{{ csrf_token() }}' },
+                        complete: function() {
+                            done++;
+                            if (done >= total) {
+                                location.reload();
+                            }
+                        }
+                    });
+                });
+            }
         });
     });
 
@@ -1169,34 +1749,58 @@ $(function() {
         });
     });
 
-    // Auto-refresh every 10 seconds
+    // Auto-refresh every 5 seconds - buscar mensagens novas
     setInterval(function() {
         $('.chat-column').each(function() {
             var conversaId = $(this).data('conversa-id');
             var container = $('#messages-' + conversaId);
             var isGroup = $(this).data('is-group') === 1;
 
+            // Pegar o ID da última mensagem (id do banco, não message_key)
+            var lastMsg = container.find('.message').last();
+            var lastMsgId = lastMsg.data('msg-id') || 0;
+
             $.ajax({
                 url: '/admin/painel/' + conversaId + '/mensagens',
                 method: 'GET',
+                data: lastMsgId ? { after_id: lastMsgId } : {},
                 success: function(response) {
-                    var currentCount = container.find('.message').length;
-                    if (response.messages.length > currentCount) {
-                        container.empty();
-                        var lastDate = null;
-                        response.messages.forEach(function(msg) {
+                    if (!response.messages || response.messages.length === 0) return;
+
+                    // Se não temos lastMsgId, é carregamento inicial - não faz nada
+                    if (!lastMsgId) return;
+
+                    var lastDate = container.find('.message-date-separator').last().find('span').text() || null;
+
+                    // Adicionar apenas as mensagens novas
+                    var hasNewClientMessage = false;
+                    var lastClientTimestamp = null;
+                    response.messages.forEach(function(msg) {
+                        // Verificar se já não existe no container
+                        if (container.find('[data-msg-id="' + msg.id + '"]').length === 0) {
                             if (msg.message_date && msg.message_date !== lastDate) {
                                 container.append('<div class="message-date-separator"><span>' + msg.message_date + '</span></div>');
                                 lastDate = msg.message_date;
                             }
                             container.append(buildMessageHtml(msg, isGroup));
-                        });
-                        container[0].scrollTop = container[0].scrollHeight;
+
+                            // Verificar se é mensagem do cliente
+                            if (!msg.is_from_me) {
+                                hasNewClientMessage = true;
+                                lastClientTimestamp = msg.timestamp;
+                            }
+                        }
+                    });
+                    container[0].scrollTop = container[0].scrollHeight;
+
+                    // Atualizar estado de aguardando se recebeu mensagem do cliente
+                    if (hasNewClientMessage && lastClientTimestamp) {
+                        setWaitingState(conversaId, lastClientTimestamp);
                     }
                 }
             });
         });
-    }, 10000);
+    }, 5000);
 });
 
 function refreshChat(conversaId) {
@@ -1285,7 +1889,7 @@ function buildMessageHtml(msg, isGroup) {
     var editedHtml = msg.is_edited ? '<span class="message-edited">editado</span>' : '';
     var checkHtml = msg.is_from_me ? '<i class="fas fa-check-double check"></i>' : '';
 
-    return '<div class="message ' + typeClass + '" data-message-key="' + msg.message_key + '" data-message-text="' + escapeHtml(msg.message_text || '') + '">' +
+    return '<div class="message ' + typeClass + '" data-msg-id="' + msg.id + '" data-message-key="' + msg.message_key + '" data-message-text="' + escapeHtml(msg.message_text || '') + '">' +
         '<div class="message-bubble">' +
         senderHtml +
         quotedHtml +
@@ -1321,15 +1925,55 @@ function cancelReply(conversaId) {
 
 function showEmojiPicker() {
     $('#contextMenu').removeClass('show');
-    var pos = currentMessageElement.offset();
-    $('#reactionPicker').css({
-        top: (pos.top - 50) + 'px',
-        left: pos.left + 'px'
-    }).addClass('show');
+
+    if (!currentMessageElement) {
+        return;
+    }
+
+    var picker = $('#reactionPicker');
+    if (picker.length === 0) {
+        return;
+    }
+
+    // Usar posição relativa à janela (viewport) para position:fixed
+    var rect = currentMessageElement[0].getBoundingClientRect();
+    var pickerHeight = 80;
+    var pickerWidth = 320;
+
+    // Calcular posição - acima da mensagem se possível
+    var top = rect.top - pickerHeight - 10;
+    var left = rect.left;
+
+    // Se ficar fora da tela (acima), colocar abaixo
+    if (top < 10) {
+        top = rect.bottom + 10;
+    }
+
+    // Se ficar fora da tela (abaixo), ajustar para caber
+    if (top + pickerHeight > window.innerHeight - 10) {
+        top = window.innerHeight - pickerHeight - 10;
+    }
+
+    // Se ficar fora da tela (direita), ajustar
+    if (left + pickerWidth > window.innerWidth) {
+        left = window.innerWidth - pickerWidth - 10;
+    }
+
+    // Garantir que não fique fora da tela (esquerda)
+    if (left < 10) {
+        left = 10;
+    }
+
+    // Forçar exibição com display:block
+    picker.css({
+        top: top + 'px',
+        left: left + 'px',
+        display: 'block'
+    });
 }
 
 function sendReaction(emoji) {
-    $('#reactionPicker').removeClass('show');
+    $('#reactionPicker').hide();
 
     $.post('/admin/painel/' + currentConversaId + '/reagir', {
         _token: '{{ csrf_token() }}',
@@ -1337,6 +1981,8 @@ function sendReaction(emoji) {
         emoji: emoji
     }).done(function() {
         refreshChat(currentConversaId);
+    }).fail(function(xhr) {
+        alert('Erro ao enviar reação: ' + (xhr.responseJSON?.error || 'Erro desconhecido'));
     });
 }
 
@@ -1363,18 +2009,29 @@ function editMessage() {
 function deleteMessage() {
     $('#contextMenu').removeClass('show');
 
-    if (!confirm('Apagar esta mensagem para todos?')) return;
-
-    $.post('/admin/painel/' + currentConversaId + '/deletar', {
-        _token: '{{ csrf_token() }}',
-        message_key: currentMessageKey
-    }).done(function(response) {
-        if (response.success) {
-            showToast('Mensagem apagada', 'success');
-            refreshChat(currentConversaId);
+    Swal.fire({
+        title: 'Apagar Mensagem',
+        text: 'Deseja apagar esta mensagem para todos?',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#dc3545',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Sim, apagar',
+        cancelButtonText: 'Cancelar'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            $.post('/admin/painel/' + currentConversaId + '/deletar', {
+                _token: '{{ csrf_token() }}',
+                message_key: currentMessageKey
+            }).done(function(response) {
+                if (response.success) {
+                    showToast('Mensagem apagada', 'success');
+                    refreshChat(currentConversaId);
+                }
+            }).fail(function(xhr) {
+                showToast(xhr.responseJSON?.error || 'Erro ao apagar mensagem', 'error');
+            });
         }
-    }).fail(function(xhr) {
-        showToast(xhr.responseJSON?.error || 'Erro ao apagar mensagem', 'error');
     });
 }
 
@@ -1412,6 +2069,7 @@ function uploadFile(conversaId, type, input) {
                 var container = $('#messages-' + conversaId);
                 container.append(buildMessageHtml(response.message));
                 container[0].scrollTop = container[0].scrollHeight;
+                clearWaitingState(conversaId);
             }
         },
         error: function(xhr) {
@@ -1461,6 +2119,7 @@ function toggleRecording(btn, conversaId) {
                                 var container = $('#messages-' + conversaId);
                                 container.append(buildMessageHtml(response.message));
                                 container[0].scrollTop = container[0].scrollHeight;
+                                clearWaitingState(conversaId);
                             }
                         },
                         error: function(xhr) {
@@ -1485,11 +2144,459 @@ function toggleRecording(btn, conversaId) {
 // Image modal
 function openImageModal(src) {
     $('#modalImage').attr('src', src);
+    $('#downloadImageBtn').attr('href', src);
     $('#imageModal').addClass('show');
 }
 
 function closeImageModal() {
     $('#imageModal').removeClass('show');
 }
+
+// Copiar texto da mensagem
+function copyMessageText() {
+    $('#contextMenu').removeClass('show');
+    var text = currentMessageElement.data('message-text');
+    if (text) {
+        navigator.clipboard.writeText(text).then(function() {
+            showToast('Texto copiado!', 'success');
+        }).catch(function() {
+            // Fallback para navegadores antigos
+            var temp = $('<textarea>').val(text).appendTo('body').select();
+            document.execCommand('copy');
+            temp.remove();
+            showToast('Texto copiado!', 'success');
+        });
+    }
+}
+
+// Encaminhar mensagem
+function forwardMessage() {
+    $('#contextMenu').removeClass('show');
+    $('#forwardModal').modal('show');
+}
+
+$(document).on('click', '.forward-target', function(e) {
+    e.preventDefault();
+    var targetConversaId = $(this).data('conversa-id');
+    var targetNome = $(this).data('nome');
+
+    $.post('/admin/painel/' + currentConversaId + '/encaminhar', {
+        _token: '{{ csrf_token() }}',
+        message_key: currentMessageKey,
+        target_conversa_id: targetConversaId
+    }).done(function(response) {
+        $('#forwardModal').modal('hide');
+        showToast('Mensagem encaminhada para ' + targetNome, 'success');
+    }).fail(function(xhr) {
+        showToast(xhr.responseJSON?.error || 'Erro ao encaminhar', 'error');
+    });
+});
+
+// Colar imagem (Ctrl+V)
+var pasteTargetConversaId = null;
+var pasteImageBlob = null;
+
+$(document).on('paste', function(e) {
+    var items = (e.originalEvent || e).clipboardData.items;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+            var blob = items[i].getAsFile();
+            var reader = new FileReader();
+
+            // Determinar qual conversa está focada
+            var focusedInput = $('input[name="mensagem"]:focus');
+            if (focusedInput.length) {
+                pasteTargetConversaId = focusedInput.closest('.chat-column').data('conversa-id');
+            } else {
+                // Pegar a primeira conversa ativa
+                pasteTargetConversaId = $('.chat-column:first').data('conversa-id');
+            }
+
+            reader.onload = function(event) {
+                $('#pastePreviewImage').attr('src', event.target.result);
+                $('#pasteCaption').val('');
+                $('#pastePreviewModal').addClass('show');
+            };
+            reader.readAsDataURL(blob);
+            pasteImageBlob = blob;
+
+            e.preventDefault();
+            break;
+        }
+    }
+});
+
+function cancelPaste() {
+    $('#pastePreviewModal').removeClass('show');
+    pasteImageBlob = null;
+}
+
+function confirmPaste() {
+    if (!pasteImageBlob || !pasteTargetConversaId) return;
+
+    var caption = $('#pasteCaption').val();
+    var formData = new FormData();
+    formData.append('_token', '{{ csrf_token() }}');
+    formData.append('imagem', pasteImageBlob, 'pasted-image.png');
+    if (caption) {
+        formData.append('caption', caption);
+    }
+
+    $.ajax({
+        url: '/admin/painel/' + pasteTargetConversaId + '/enviar-imagem',
+        method: 'POST',
+        data: formData,
+        processData: false,
+        contentType: false,
+        success: function(response) {
+            if (response.success && response.message) {
+                var container = $('#messages-' + pasteTargetConversaId);
+                container.append(buildMessageHtml(response.message));
+                container[0].scrollTop = container[0].scrollHeight;
+                clearWaitingState(pasteTargetConversaId);
+            }
+            cancelPaste();
+        },
+        error: function(xhr) {
+            showToast(xhr.responseJSON?.error || 'Erro ao enviar imagem', 'error');
+        }
+    });
+}
+
+// Formatar tempo de espera de forma legível
+function formatWaitingTime(seconds) {
+    if (seconds < 60) {
+        return seconds + 's';
+    } else if (seconds < 3600) {
+        // Menos de 1 hora: mostra MM:SS
+        var mins = Math.floor(seconds / 60);
+        var secs = seconds % 60;
+        return mins + ':' + secs.toString().padStart(2, '0');
+    } else if (seconds < 86400) {
+        // Menos de 24 horas: mostra Xh Xm
+        var hours = Math.floor(seconds / 3600);
+        var mins = Math.floor((seconds % 3600) / 60);
+        return hours + 'h ' + mins + 'm';
+    } else {
+        // Mais de 24 horas: mostra Xd Xh
+        var days = Math.floor(seconds / 86400);
+        var hours = Math.floor((seconds % 86400) / 3600);
+        return days + 'd ' + hours + 'h';
+    }
+}
+
+// Timer de espera do cliente
+function updateWaitingTimers() {
+    $('.chat-column').each(function() {
+        var column = $(this);
+        // Usar attr() em vez de data() para pegar valores atualizados dinamicamente
+        var lastMsgTime = column.attr('data-last-client-msg');
+        var timerEl = column.find('.waiting-timer');
+
+        if (lastMsgTime) {
+            var now = Math.floor(Date.now() / 1000);
+            var diff = now - parseInt(lastMsgTime);
+
+            if (diff > 0) {
+                var timeStr = formatWaitingTime(diff);
+
+                if (timerEl.length === 0) {
+                    column.find('.chat-column-header').append('<span class="waiting-timer">' + timeStr + '</span>');
+                    column.addClass('cliente-aguardando');
+                } else {
+                    timerEl.text(timeStr);
+                }
+            }
+        } else {
+            timerEl.remove();
+            column.removeClass('cliente-aguardando');
+        }
+    });
+}
+
+setInterval(updateWaitingTimers, 1000);
+
+// ===== Nova Conversa =====
+$('#btnNovaConversa').on('click', function() {
+    $('#novaConversaNumero').val('');
+    $('#novaConversaNome').val('');
+    $('#novaConversaMensagem').val('');
+    $('#novaConversaModal').modal('show');
+});
+
+$('#btnIniciarConversa').on('click', function() {
+    var btn = $(this);
+    var accountId = $('#novaConversaInstancia').val();
+    var numero = $('#novaConversaNumero').val().trim();
+    var nome = $('#novaConversaNome').val().trim();
+    var mensagem = $('#novaConversaMensagem').val().trim();
+
+    if (!numero) {
+        showToast('Informe o numero do WhatsApp', 'error');
+        return;
+    }
+
+    if (!mensagem) {
+        showToast('Digite uma mensagem para iniciar a conversa', 'error');
+        return;
+    }
+
+    btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Enviando...');
+
+    $.post('/admin/painel/nova-conversa', {
+        _token: '{{ csrf_token() }}',
+        account_id: accountId,
+        numero: numero,
+        nome: nome,
+        mensagem: mensagem
+    }).done(function(response) {
+        showToast(response.message || 'Conversa iniciada!', 'success');
+        $('#novaConversaModal').modal('hide');
+        // Recarregar para mostrar a nova conversa
+        setTimeout(function() {
+            location.reload();
+        }, 1000);
+    }).fail(function(xhr) {
+        showToast(xhr.responseJSON?.error || 'Erro ao iniciar conversa', 'error');
+    }).always(function() {
+        btn.prop('disabled', false).html('<i class="fas fa-paper-plane"></i> Iniciar Conversa');
+    });
+});
+
+// ===== Editar Contato =====
+$(document).on('click', '.btn-editar-contato', function(e) {
+    e.preventDefault();
+    var chatId = $(this).data('chat-id');
+    var conversaId = $(this).data('id');
+    var nome = $(this).data('nome');
+    var jid = $(this).data('jid');
+    var numero = $(this).data('numero');
+
+    $('#editContactChatId').val(chatId);
+    $('#editContactConversaId').val(conversaId);
+    $('#editContactNome').val(nome);
+    $('#editContactJidAtual').text(jid);
+
+    // Extrair número do JID
+    var numLimpo = jid ? jid.replace(/@.*$/, '') : numero;
+    $('#editContactNumero').val(numLimpo);
+
+    $('#editContactModal').modal('show');
+});
+
+$('#btnSalvarContato').on('click', function() {
+    var btn = $(this);
+    var chatId = $('#editContactChatId').val();
+    var nome = $('#editContactNome').val().trim();
+    var numero = $('#editContactNumero').val().trim();
+
+    if (!nome) {
+        showToast('Informe o nome do contato', 'error');
+        return;
+    }
+
+    btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Salvando...');
+
+    $.post('/admin/contatos/atualizar-chat', {
+        _token: '{{ csrf_token() }}',
+        chat_id: chatId,
+        nome: nome,
+        numero: numero
+    }).done(function(response) {
+        showToast(response.message || 'Contato atualizado!', 'success');
+        $('#editContactModal').modal('hide');
+
+        // Atualizar header do chat
+        var conversaId = $('#editContactConversaId').val();
+        var column = $('.chat-column[data-conversa-id="' + conversaId + '"]');
+
+        // Atualizar nome e número
+        column.find('.chat-column-header .info .name').contents().first().replaceWith(nome + ' ');
+        column.find('.chat-column-header .info .number').text(numero);
+
+        // Atualizar avatar (iniciais)
+        var initials = nome.substring(0, 2).toUpperCase();
+        column.find('.chat-column-header .avatar').not(':has(i)').text(initials);
+
+        // Atualizar data attributes do botão editar
+        column.find('.btn-editar-contato').data('nome', nome).data('numero', numero);
+    }).fail(function(xhr) {
+        showToast(xhr.responseJSON?.error || 'Erro ao salvar', 'error');
+    }).always(function() {
+        btn.prop('disabled', false).html('<i class="fas fa-save"></i> Salvar');
+    });
+});
+
+// ===== Mesclar Chat =====
+$(document).on('click', '.btn-mesclar-chat', function(e) {
+    e.preventDefault();
+    var chatId = $(this).data('chat-id');
+    var nome = $(this).data('nome');
+
+    $('#mergeChatId').val(chatId);
+    $('#mergeNomeAtual').text(nome);
+    $('#mergeTargetJid').val('');
+    $('#mergeSearchResults').html('');
+    $('#mergeChatModal').modal('show');
+});
+
+$('#btnBuscarMerge').on('click', function() {
+    var termo = $('#mergeTargetJid').val().trim();
+    if (!termo) return;
+
+    $.get('/admin/contatos/buscar-chats', { termo: termo }).done(function(response) {
+        var html = '';
+        if (response.chats && response.chats.length > 0) {
+            response.chats.forEach(function(chat) {
+                html += '<a href="#" class="list-group-item list-group-item-action merge-target" data-id="' + chat.id + '">';
+                html += '<strong>' + chat.chat_name + '</strong><br>';
+                html += '<small class="text-muted">' + chat.chat_id + '</small>';
+                html += '</a>';
+            });
+        } else {
+            html = '<div class="text-muted p-3">Nenhum chat encontrado</div>';
+        }
+        $('#mergeSearchResults').html(html);
+    });
+});
+
+$(document).on('click', '.merge-target', function(e) {
+    e.preventDefault();
+    var targetId = $(this).data('id');
+    var targetName = $(this).find('strong').text();
+    var chatId = $('#mergeChatId').val();
+
+    Swal.fire({
+        title: 'Mesclar Chats',
+        html: 'As mensagens serao movidas para:<br><strong>' + targetName + '</strong><br><br><small class="text-warning">Esta acao nao pode ser desfeita.</small>',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#ffc107',
+        cancelButtonColor: '#6c757d',
+        confirmButtonText: 'Sim, mesclar',
+        cancelButtonText: 'Cancelar'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            $.post('/admin/contatos/mesclar-chats', {
+                _token: '{{ csrf_token() }}',
+                primary_chat_id: targetId,
+                secondary_chat_id: chatId
+            }).done(function(response) {
+                Swal.fire({
+                    title: 'Mesclado!',
+                    text: 'Os chats foram mesclados com sucesso.',
+                    icon: 'success',
+                    timer: 1500,
+                    showConfirmButton: false
+                }).then(() => {
+                    $('#mergeChatModal').modal('hide');
+                    location.reload();
+                });
+            }).fail(function(xhr) {
+                showToast(xhr.responseJSON?.error || 'Erro ao mesclar', 'error');
+            });
+        }
+    });
+});
+
+// ===== Sidebar da Fila =====
+function openFilaSidebar() {
+    $('#filaSidebarOverlay').addClass('show');
+    $('#filaSidebar').addClass('show');
+    loadFilaData();
+}
+
+function closeFilaSidebar() {
+    $('#filaSidebarOverlay').removeClass('show');
+    $('#filaSidebar').removeClass('show');
+}
+
+function loadFilaData() {
+    $('#filaSidebarBody').html('<div class="fila-sidebar-loading"><i class="fas fa-spinner fa-spin fa-2x"></i><p class="mt-2">Carregando...</p></div>');
+
+    $.get('/admin/fila/dados').done(function(response) {
+        var conversas = response.conversas || [];
+        $('#filaSidebarCount').text(conversas.length);
+        $('#filaCountBadge').text(conversas.length);
+
+        if (conversas.length === 0) {
+            $('#filaSidebarBody').html(
+                '<div class="fila-sidebar-empty">' +
+                '<i class="fas fa-check-circle"></i>' +
+                '<h5>Nenhuma conversa na fila!</h5>' +
+                '<p>Todas as conversas estao sendo atendidas.</p>' +
+                '</div>'
+            );
+            return;
+        }
+
+        var html = '';
+        conversas.forEach(function(conv, index) {
+            var initials = (conv.cliente_nome || 'C').substring(0, 2).toUpperCase();
+            var colorClass = 'color-' + ((index % 5) + 1);
+            var preview = conv.ultima_mensagem ? conv.ultima_mensagem.substring(0, 40) + (conv.ultima_mensagem.length > 40 ? '...' : '') : '';
+
+            html += '<div class="fila-sidebar-item" data-id="' + conv.id + '">';
+            html += '<div class="avatar ' + colorClass + '">' + initials + '</div>';
+            html += '<div class="info">';
+            html += '<div class="nome">' + (conv.cliente_nome || 'Cliente') + '</div>';
+            html += '<div class="numero">' + conv.cliente_numero + '</div>';
+            if (preview) {
+                html += '<div class="preview"><i class="fas fa-comment"></i> ' + escapeHtml(preview) + '</div>';
+            }
+            html += '<div class="tempo"><i class="fas fa-clock"></i> ' + conv.tempo_na_fila + '</div>';
+            html += '</div>';
+            html += '<button class="btn btn-success btn-sm btn-pegar" data-id="' + conv.id + '"><i class="fas fa-hand-paper"></i></button>';
+            html += '</div>';
+        });
+
+        $('#filaSidebarBody').html(html);
+    }).fail(function() {
+        $('#filaSidebarBody').html(
+            '<div class="fila-sidebar-empty">' +
+            '<i class="fas fa-exclamation-triangle text-warning"></i>' +
+            '<h5>Erro ao carregar</h5>' +
+            '<p>Tente novamente.</p>' +
+            '</div>'
+        );
+    });
+}
+
+$('#btnFilaSidebar').on('click', function() {
+    openFilaSidebar();
+});
+
+$('#closeFilaSidebar, #filaSidebarOverlay').on('click', function() {
+    closeFilaSidebar();
+});
+
+// Pegar conversa da fila
+$(document).on('click', '.fila-sidebar-item .btn-pegar', function(e) {
+    e.stopPropagation();
+    var btn = $(this);
+    var conversaId = btn.data('id');
+
+    btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i>');
+
+    $.post('/admin/conversas/' + conversaId + '/atender', {
+        _token: '{{ csrf_token() }}'
+    }).done(function(response) {
+        showToast('Conversa pega com sucesso!', 'success');
+        closeFilaSidebar();
+        setTimeout(function() {
+            location.reload();
+        }, 500);
+    }).fail(function(xhr) {
+        btn.prop('disabled', false).html('<i class="fas fa-hand-paper"></i>');
+        showToast(xhr.responseJSON?.error || 'Erro ao pegar conversa', 'error');
+    });
+});
+
+// Auto-refresh da fila a cada 30 segundos se o sidebar estiver aberto
+setInterval(function() {
+    if ($('#filaSidebar').hasClass('show')) {
+        loadFilaData();
+    }
+}, 30000);
 </script>
 @stop

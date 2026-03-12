@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Api;
 use App\Events\NewMessageReceived;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
+use App\Models\ContactAlias;
 use App\Models\Conversa;
 use App\Models\Message;
 use App\Models\WhatsappAccount;
+use App\Services\ChatMergeService;
 use App\Services\EvolutionApiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -34,6 +36,7 @@ class WebhookController extends Controller
                 'MESSAGES_UPDATE' => $this->handleMessagesUpdate($payload),
                 'MESSAGES_DELETE' => $this->handleMessagesDelete($payload),
                 'SEND_MESSAGE' => $this->handleSendMessage($payload),
+                'SEND_REACTION' => $this->handleReaction($payload),
                 'PRESENCE_UPDATE' => $this->handlePresenceUpdate($payload),
                 default => response()->json(['status' => 'ignored', 'event' => $event]),
             };
@@ -128,6 +131,11 @@ class WebhookController extends Controller
         $key = $messageData['key'] ?? [];
         $message = $messageData['message'] ?? [];
 
+        // Verificar se é uma reação
+        if (isset($message['reactionMessage'])) {
+            return $this->processReaction($messageData);
+        }
+
         $remoteJid = $key['remoteJid'] ?? null;
         $messageId = $key['id'] ?? null;
         $fromMe = $key['fromMe'] ?? false;
@@ -143,16 +151,31 @@ class WebhookController extends Controller
         // Nome do remetente
         $senderName = $messageData['pushName'] ?? null;
 
-        // Buscar ou criar chat
-        $chat = Chat::firstOrCreate(
-            ['account_id' => $account->id, 'chat_id' => $remoteJid],
-            [
-                'chat_name' => $isGroup
-                    ? ($this->getGroupName($messageData) ?? $this->extractPhoneFromJid($remoteJid))
-                    : ($senderName ?? $this->extractPhoneFromJid($remoteJid)),
-                'chat_type' => $isGroup ? 'group' : 'individual',
-            ]
-        );
+        // 1. Verificar se existe alias para este JID (LID mapeado para chat principal)
+        $alias = ContactAlias::where('account_id', $account->id)
+            ->where('alias_jid', $remoteJid)
+            ->first();
+
+        if ($alias) {
+            // Usar o chat principal ao invés de criar novo
+            $chat = $alias->primaryChat;
+        } else {
+            // 2. Buscar ou criar chat pelo JID
+            $chat = Chat::firstOrCreate(
+                ['account_id' => $account->id, 'chat_id' => $remoteJid],
+                [
+                    'chat_name' => $isGroup
+                        ? ($this->getGroupName($messageData) ?? $this->extractPhoneFromJid($remoteJid))
+                        : ($senderName ?? $this->extractPhoneFromJid($remoteJid)),
+                    'chat_type' => $isGroup ? 'group' : 'individual',
+                ]
+            );
+
+            // Atualizar nome se estava sem nome e agora tem
+            if (!$chat->chat_name && $senderName) {
+                $chat->update(['chat_name' => $senderName]);
+            }
+        }
 
         // Para grupos, atualizar nome se veio no payload
         if ($isGroup && isset($messageData['groupSubject'])) {
@@ -229,9 +252,12 @@ class WebhookController extends Controller
             $messageText = $message['contactMessage']['displayName'] ?? 'Contato';
         }
 
+        // Determinar JID do owner (fallback para phone_number se owner_jid estiver nulo)
+        $ownerJid = $account->owner_jid ?? (preg_replace('/\D/', '', $account->phone_number) . '@s.whatsapp.net');
+
         // Determinar JID do remetente real
         $senderJid = $fromMe
-            ? $account->owner_jid
+            ? $ownerJid
             : ($isGroup ? $participant : $remoteJid);
 
         // Criar ou atualizar mensagem
@@ -242,7 +268,7 @@ class WebhookController extends Controller
                 'from_jid' => $senderJid ?? $remoteJid,
                 'sender_name' => $fromMe ? null : $senderName,
                 'participant_jid' => $isGroup ? $participant : null,
-                'to_jid' => $fromMe ? $remoteJid : $account->owner_jid,
+                'to_jid' => $fromMe ? $remoteJid : $ownerJid,
                 'message_text' => $messageText,
                 'message_type' => $messageType,
                 'media_url' => $mediaUrl,
@@ -289,17 +315,38 @@ class WebhookController extends Controller
         ?string $filename = null
     ): ?string {
         try {
-            $evolutionService = app(EvolutionApiService::class);
+            $base64 = null;
 
-            // Tentar baixar mídia via Evolution API
-            $result = $evolutionService->downloadMedia($account->session_name, $messageId);
+            // 1. Primeiro tentar usar base64 que já vem no payload (evita desconexão)
+            $message = $messageData['data']['message'] ?? [];
+            $typeKey = $type . 'Message';
+            if ($type === 'image') $typeKey = 'imageMessage';
+            if ($type === 'video') $typeKey = 'videoMessage';
+            if ($type === 'audio') $typeKey = 'audioMessage';
+            if ($type === 'document') $typeKey = 'documentMessage';
+            if ($type === 'sticker') $typeKey = 'stickerMessage';
 
-            if (!$result['success'] || empty($result['data']['base64'])) {
+            // Verificar se o base64 já veio no webhook
+            if (isset($message[$typeKey]['base64'])) {
+                $base64 = $message[$typeKey]['base64'];
+                Log::info('Usando base64 do webhook', ['messageId' => $messageId]);
+            }
+
+            // 2. Se não veio, tentar baixar via API (pode causar reconexão)
+            if (!$base64) {
+                $evolutionService = app(EvolutionApiService::class);
+                $result = $evolutionService->downloadMedia($account->session_name, $messageId);
+
+                if ($result['success'] && !empty($result['data']['base64'])) {
+                    $base64 = $result['data']['base64'];
+                }
+            }
+
+            if (!$base64) {
                 Log::warning('Mídia não disponível para download', ['messageId' => $messageId]);
                 return null;
             }
 
-            $base64 = $result['data']['base64'];
             $extension = $this->getExtensionFromMimeType($mimeType);
 
             // Gerar nome do arquivo
@@ -389,8 +436,19 @@ class WebhookController extends Controller
             ? ($chat->chat_name ?? $messageData['groupSubject'] ?? 'Grupo')
             : ($messageData['pushName'] ?? null);
 
-        $conversa = Conversa::where('chat_id', $chat->id)
+        // Buscar conversa existente pelo chat_id OU pelo número do cliente
+        // Isso resolve o problema de LID vs número real (mesmo contato, JIDs diferentes)
+        $conversa = Conversa::where('account_id', $account->id)
             ->whereIn('status', ['aguardando', 'em_atendimento'])
+            ->where(function ($query) use ($chat, $phoneNumber, $clienteName) {
+                $query->where('chat_id', $chat->id)
+                    ->orWhere('cliente_numero', $phoneNumber);
+
+                // Se tem nome, também busca pelo nome para pegar conversas com LID
+                if ($clienteName) {
+                    $query->orWhere('cliente_nome', $clienteName);
+                }
+            })
             ->first();
 
         if (!$conversa) {
@@ -405,11 +463,19 @@ class WebhookController extends Controller
                 'cliente_aguardando_desde' => now(),
             ]);
         } else {
-            $updateData = ['ultima_msg_em' => now()];
+            $updateData = [
+                'ultima_msg_em' => now(),
+                'chat_id' => $chat->id, // Atualizar para o chat atual (pode ter mudado de LID para número)
+            ];
 
             // Atualizar nome se mudou
             if ($clienteName && $conversa->cliente_nome !== $clienteName) {
                 $updateData['cliente_nome'] = $clienteName;
+            }
+
+            // Atualizar número se estiver usando LID e agora veio o número real
+            if (strlen($phoneNumber) < 15 && strlen($conversa->cliente_numero) > 15) {
+                $updateData['cliente_numero'] = $phoneNumber;
             }
 
             if (!$conversa->cliente_aguardando_desde) {
@@ -467,7 +533,7 @@ class WebhookController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Instance name missing']);
         }
 
-        $account = WhatsappAccount::where('instance_name', $instanceName)->first();
+        $account = WhatsappAccount::where('session_name', $instanceName)->first();
         if (!$account) {
             return response()->json(['status' => 'error', 'message' => 'Account not found']);
         }
@@ -479,6 +545,118 @@ class WebhookController extends Controller
         }
 
         return response()->json(['status' => 'ok']);
+    }
+
+    protected function handleReaction(array $payload)
+    {
+        $data = $payload['data'] ?? [];
+        $reactionMessage = $data['message']['reactionMessage'] ?? $data['reactionMessage'] ?? null;
+
+        if (!$reactionMessage) {
+            return response()->json(['status' => 'ok']);
+        }
+
+        // ID da mensagem que recebeu a reação
+        $targetMessageId = $reactionMessage['key']['id'] ?? null;
+        $emoji = $reactionMessage['text'] ?? null;
+        $fromJid = $data['key']['remoteJid'] ?? $data['key']['participant'] ?? null;
+        $fromMe = $data['key']['fromMe'] ?? false;
+
+        if (!$targetMessageId) {
+            return response()->json(['status' => 'ok']);
+        }
+
+        // Buscar mensagem alvo
+        $message = Message::where('message_key', $targetMessageId)
+            ->orWhere('message_key', 'like', '%' . $targetMessageId)
+            ->first();
+
+        if (!$message) {
+            return response()->json(['status' => 'ok']);
+        }
+
+        $reactions = $message->reactions ?? [];
+
+        if (empty($emoji)) {
+            // Remover reação (emoji vazio = remoção)
+            $reactions = array_filter($reactions, fn($r) => ($r['from'] ?? '') !== $fromJid);
+        } else {
+            // Remover reação anterior do mesmo remetente
+            $reactions = array_filter($reactions, fn($r) => ($r['from'] ?? '') !== $fromJid);
+
+            // Adicionar nova reação
+            $reactions[] = [
+                'emoji' => $emoji,
+                'from' => $fromMe ? 'me' : $fromJid,
+                'timestamp' => time(),
+            ];
+        }
+
+        $message->update(['reactions' => array_values($reactions)]);
+
+        Log::info('Reação processada', [
+            'message_id' => $targetMessageId,
+            'emoji' => $emoji,
+            'from' => $fromJid,
+        ]);
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    protected function processReaction(array $messageData)
+    {
+        $key = $messageData['key'] ?? [];
+        $message = $messageData['message'] ?? [];
+        $reactionMessage = $message['reactionMessage'] ?? null;
+
+        if (!$reactionMessage) {
+            return;
+        }
+
+        // ID da mensagem que recebeu a reação
+        $targetMessageId = $reactionMessage['key']['id'] ?? null;
+        $emoji = $reactionMessage['text'] ?? null;
+        $fromJid = $key['remoteJid'] ?? $key['participant'] ?? null;
+        $fromMe = $key['fromMe'] ?? false;
+
+        if (!$targetMessageId) {
+            return;
+        }
+
+        // Buscar mensagem alvo
+        $dbMessage = Message::where('message_key', $targetMessageId)
+            ->orWhere('message_key', 'like', '%' . $targetMessageId)
+            ->first();
+
+        if (!$dbMessage) {
+            Log::info('Reação ignorada - mensagem não encontrada', ['target' => $targetMessageId]);
+            return;
+        }
+
+        $reactions = $dbMessage->reactions ?? [];
+
+        if (empty($emoji)) {
+            // Remover reação (emoji vazio = remoção)
+            $reactions = array_filter($reactions, fn($r) => ($r['from'] ?? '') !== $fromJid);
+        } else {
+            // Remover reação anterior do mesmo remetente
+            $reactions = array_filter($reactions, fn($r) => ($r['from'] ?? '') !== $fromJid);
+
+            // Adicionar nova reação
+            $reactions[] = [
+                'emoji' => $emoji,
+                'from' => $fromMe ? 'me' : $fromJid,
+                'timestamp' => time(),
+            ];
+        }
+
+        $dbMessage->update(['reactions' => array_values($reactions)]);
+
+        Log::info('Reação processada via MESSAGES_UPSERT', [
+            'message_id' => $targetMessageId,
+            'emoji' => $emoji,
+            'from' => $fromJid,
+        ]);
     }
 
     protected function handlePresenceUpdate(array $payload)

@@ -126,4 +126,64 @@ class WhatsappAccountController extends Controller
             return response()->json(['error' => $e->getMessage()], 500);
         }
     }
+
+    public function restart(WhatsappAccount $whatsapp)
+    {
+        try {
+            $service = app(EvolutionApiService::class);
+            $result = $service->restartInstance($whatsapp->session_name);
+
+            return redirect()->route('admin.whatsapp.index')
+                ->with('success', 'Instancia reiniciada! Aguarde alguns segundos para reconectar.');
+        } catch (\Exception $e) {
+            return redirect()->route('admin.whatsapp.index')
+                ->with('error', 'Erro ao reiniciar: ' . $e->getMessage());
+        }
+    }
+
+    public function checkStatus()
+    {
+        $user = Auth::user();
+        $service = app(EvolutionApiService::class);
+
+        $query = WhatsappAccount::query();
+        if ($user->empresa_id) {
+            $query->where('empresa_id', $user->empresa_id);
+        }
+
+        $accounts = $query->get();
+        $results = [];
+
+        foreach ($accounts as $account) {
+            $wasConnected = $account->is_connected;
+            $isConnected = false;
+
+            try {
+                $result = $service->getConnectionState($account->session_name);
+                $state = $result['data']['instance']['state'] ?? 'unknown';
+                $isConnected = $state === 'open';
+
+                if ($account->is_connected !== $isConnected) {
+                    $account->update([
+                        'is_connected' => $isConnected,
+                        'last_connection' => $isConnected ? now() : $account->last_connection,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                if ($account->is_connected) {
+                    $account->update(['is_connected' => false]);
+                }
+            }
+
+            $results[] = [
+                'id' => $account->id,
+                'session_name' => $account->session_name,
+                'is_connected' => $isConnected,
+                'was_connected' => $wasConnected,
+                'just_disconnected' => $wasConnected && !$isConnected,
+            ];
+        }
+
+        return response()->json(['instances' => $results]);
+    }
 }

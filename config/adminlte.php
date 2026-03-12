@@ -173,6 +173,11 @@ return [
             'icon' => 'fas fa-fw fa-file-alt',
         ],
         [
+            'text' => 'Saude do Sistema',
+            'route' => 'admin.saude',
+            'icon' => 'fas fa-fw fa-heartbeat text-danger',
+        ],
+        [
             'text' => 'Sincronizar Contatos',
             'route' => 'admin.contatos.sincronizar.page',
             'icon' => 'fas fa-fw fa-sync',
@@ -250,6 +255,16 @@ return [
                     'type' => 'js',
                     'asset' => false,
                     'location' => '//cdn.jsdelivr.net/npm/sweetalert2@11',
+                ],
+            ],
+        ],
+        'InstanceMonitor' => [
+            'active' => true,
+            'files' => [
+                [
+                    'type' => 'js',
+                    'asset' => true,
+                    'location' => 'js/instance-monitor.js',
                 ],
             ],
         ],

@@ -239,6 +239,35 @@
     color: #6c757d;
     margin-bottom: 20px;
 }
+
+/* Timer de espera do cliente */
+.waiting-timer {
+    position: absolute;
+    top: 12px;
+    right: 35px;
+    background: #dc3545;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    animation: pulse 1s infinite;
+}
+
+.conversa-card.cliente-aguardando {
+    border: 2px solid #dc3545;
+    animation: borderPulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+@keyframes borderPulse {
+    0%, 100% { box-shadow: 0 0 5px rgba(220, 53, 69, 0.5); }
+    50% { box-shadow: 0 0 15px rgba(220, 53, 69, 0.8); }
+}
 </style>
 @stop
 
@@ -281,8 +310,20 @@
         $diffHoras = $tempoAtendimento->diffInHours(now());
         $diffMinutos = $tempoAtendimento->diffInMinutes(now()) % 60;
         $mensagens = $conversa->chat?->messages?->reverse() ?? collect();
+        // Calcular se cliente está aguardando resposta
+        $lastClientMsgTime = null;
+        foreach ($mensagens as $msg) {
+            if (!$msg->is_from_me) {
+                $lastClientMsgTime = $msg->timestamp;
+                break;
+            } else {
+                break;
+            }
+        }
     @endphp
-    <div class="conversa-card" data-atendente="{{ $conversa->atendente_id }}">
+    <div class="conversa-card {{ $lastClientMsgTime ? 'cliente-aguardando' : '' }}"
+         data-atendente="{{ $conversa->atendente_id }}"
+         data-last-client-msg="{{ $lastClientMsgTime }}">
         {{-- Header --}}
         <div class="conversa-card-header">
             <div class="avatar">
@@ -370,6 +411,39 @@ $(function() {
     $('.conversa-card-body').each(function() {
         this.scrollTop = this.scrollHeight;
     });
+
+    // Timer de espera do cliente
+    function updateWaitingTimers() {
+        $('.conversa-card').each(function() {
+            var card = $(this);
+            var lastMsgTime = card.data('last-client-msg');
+            var timerEl = card.find('.waiting-timer');
+
+            if (lastMsgTime) {
+                var now = Math.floor(Date.now() / 1000);
+                var diff = now - lastMsgTime;
+
+                if (diff > 0) {
+                    var mins = Math.floor(diff / 60);
+                    var secs = diff % 60;
+                    var timeStr = mins.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+
+                    if (timerEl.length === 0) {
+                        card.find('.conversa-card-header').append('<span class="waiting-timer">' + timeStr + '</span>');
+                        card.addClass('cliente-aguardando');
+                    } else {
+                        timerEl.text(timeStr);
+                    }
+                }
+            } else {
+                timerEl.remove();
+                card.removeClass('cliente-aguardando');
+            }
+        });
+    }
+
+    setInterval(updateWaitingTimers, 1000);
+    updateWaitingTimers();
 });
 </script>
 @stop

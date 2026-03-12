@@ -104,6 +104,16 @@
     line-height: 1.2;
 }
 
+a.stat-box {
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: pointer;
+}
+
+a.stat-box:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
 .action-buttons {
     display: flex;
     gap: 10px;
@@ -178,6 +188,30 @@
 @stop
 
 @section('content')
+@if(session('success'))
+    <div class="alert alert-success alert-dismissible">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        <i class="fas fa-check-circle"></i> {{ session('success') }}
+    </div>
+@endif
+
+@if(session('error'))
+    <div class="alert alert-danger alert-dismissible">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        <i class="fas fa-exclamation-circle"></i> {{ session('error') }}
+    </div>
+@endif
+
+@if($errors->any())
+    <div class="alert alert-danger alert-dismissible">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        <i class="fas fa-exclamation-circle"></i>
+        @foreach($errors->all() as $error)
+            {{ $error }}<br>
+        @endforeach
+    </div>
+@endif
+
 <div class="row">
     {{-- Coluna principal --}}
     <div class="col-lg-8">
@@ -192,7 +226,7 @@
                 </p>
 
                 <div class="stats-row">
-                    <div class="stat-box bg-teal">
+                    <a href="{{ route('admin.contatos.index') }}" class="stat-box bg-teal" style="text-decoration: none;">
                         <div class="icon">
                             <i class="fas fa-address-book"></i>
                         </div>
@@ -200,8 +234,8 @@
                             <div class="label">Total de Contatos</div>
                             <div class="value">{{ $stats['total_contatos'] }}</div>
                         </div>
-                    </div>
-                    <div class="stat-box bg-warning">
+                    </a>
+                    <a href="{{ route('admin.contatos.index', ['filter' => 'sem_nome']) }}" class="stat-box bg-warning" style="text-decoration: none;">
                         <div class="icon">
                             <i class="fas fa-user-slash"></i>
                         </div>
@@ -209,8 +243,8 @@
                             <div class="label">Sem Nome</div>
                             <div class="value">{{ $stats['sem_nome'] }}</div>
                         </div>
-                    </div>
-                    <div class="stat-box bg-danger">
+                    </a>
+                    <a href="{{ route('admin.contatos.chats-sem-contato') }}" class="stat-box bg-danger" style="text-decoration: none;">
                         <div class="icon">
                             <i class="fas fa-exclamation-triangle"></i>
                         </div>
@@ -218,7 +252,7 @@
                             <div class="label">Chats sem Contato</div>
                             <div class="value">{{ $stats['chats_sem_contato'] }}</div>
                         </div>
-                    </div>
+                    </a>
                 </div>
 
                 <div class="action-buttons">
@@ -231,6 +265,9 @@
                     </form>
                     <a href="{{ route('admin.contatos.index') }}" class="btn btn-outline-secondary">
                         <i class="fas fa-list"></i> Ver Contatos
+                    </a>
+                    <a href="{{ route('admin.contatos.duplicados') }}" class="btn btn-outline-warning">
+                        <i class="fas fa-users"></i> Chats Duplicados
                     </a>
                 </div>
             </div>
@@ -299,6 +336,19 @@ $(function() {
     // Atualizar hidden input quando radio mudar
     $('input[name="instancia_selecionada"]').on('change', function() {
         $('#accountIdInput').val($(this).val());
+    });
+
+    // Mostrar loading ao submeter
+    $('#formSincronizar').on('submit', function(e) {
+        var accountId = $('#accountIdInput').val();
+        if (!accountId) {
+            e.preventDefault();
+            alert('Selecione uma instância primeiro!');
+            return false;
+        }
+        var btn = $(this).find('button[type="submit"]');
+        btn.prop('disabled', true);
+        btn.html('<i class="fas fa-spinner fa-spin"></i> Sincronizando...');
     });
 });
 </script>
