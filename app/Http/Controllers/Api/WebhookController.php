@@ -357,7 +357,7 @@ class WebhookController extends Controller
                 'media_filename' => $mediaFilename,
                 'media_duration' => $mediaDuration,
                 'is_from_me' => $fromMe,
-                'timestamp' => $messageData['messageTimestamp'] ?? time(),
+                'timestamp' => $this->extractTimestamp($messageData['messageTimestamp'] ?? time()),
                 'status' => 'delivered',
                 'quoted_message_id' => $quotedMessageId,
                 'quoted_text' => $quotedText,
@@ -881,5 +881,30 @@ class WebhookController extends Controller
     protected function extractPhoneFromJid(string $jid): string
     {
         return explode('@', $jid)[0];
+    }
+
+    /**
+     * Extrair timestamp de diferentes formatos (int, array com low/high, etc)
+     */
+    protected function extractTimestamp($timestamp): int
+    {
+        if (is_int($timestamp)) {
+            return $timestamp;
+        }
+
+        if (is_array($timestamp)) {
+            // Formato: {"low": 1234567890, "high": 0, "unsigned": true}
+            return $timestamp['low'] ?? time();
+        }
+
+        if (is_object($timestamp)) {
+            return $timestamp->low ?? time();
+        }
+
+        if (is_numeric($timestamp)) {
+            return (int) $timestamp;
+        }
+
+        return time();
     }
 }

@@ -230,9 +230,10 @@
                 </td>
                 <td>
                     <button class="btn btn-success btn-enviar btn-enviar-msg"
-                            data-phone="{{ $contact->phone }}"
+                            data-phone="{{ $contact->phone ?: preg_replace('/@.*$/', '', $contact->jid) }}"
                             data-name="{{ $contact->name }}"
-                            data-account="{{ $contact->account_id }}">
+                            data-account="{{ $contact->account_id }}"
+                            data-jid="{{ $contact->jid }}">
                         <i class="fas fa-paper-plane"></i> Enviar Mensagem
                     </button>
                 </td>
@@ -328,6 +329,13 @@
 
 @section('js')
 <script>
+toastr.options = {
+    "closeButton": true,
+    "progressBar": true,
+    "positionClass": "toast-top-right",
+    "timeOut": "3000"
+};
+
 $(function() {
     var currentPhone = null;
     var currentAccountId = null;
@@ -349,7 +357,7 @@ $(function() {
     $('#btnEnviarMsg').on('click', function() {
         var mensagem = $('#mensagemTexto').val().trim();
         if (!mensagem) {
-            alert('Digite uma mensagem');
+            toastr.warning('Digite uma mensagem');
             return;
         }
 
@@ -367,10 +375,10 @@ $(function() {
             },
             success: function(response) {
                 $('#enviarMsgModal').modal('hide');
-                alert('Mensagem enviada com sucesso!');
+                toastr.success('Mensagem enviada com sucesso!');
             },
             error: function(xhr) {
-                alert('Erro ao enviar: ' + (xhr.responseJSON?.error || 'Erro desconhecido'));
+                toastr.error('Erro ao enviar: ' + (xhr.responseJSON?.error || 'Erro desconhecido'));
             },
             complete: function() {
                 btn.prop('disabled', false).html('<i class="fas fa-paper-plane"></i> Enviar');

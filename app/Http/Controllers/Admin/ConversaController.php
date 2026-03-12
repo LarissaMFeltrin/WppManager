@@ -82,7 +82,7 @@ class ConversaController extends Controller
 
         $user->increment('conversas_ativas');
 
-        return redirect()->route('admin.chat', ['conversa' => $conversa->id])
+        return redirect()->route('admin.painel', ['conversa' => $conversa->id])
             ->with('success', 'Conversa iniciada!');
     }
 
