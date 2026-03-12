@@ -183,8 +183,27 @@ class ContactController extends Controller
             $account = WhatsappAccount::findOrFail($validated['account_id']);
             $service = app(EvolutionApiService::class);
 
-            // Extrair apenas o numero do phone (remover @s.whatsapp.net se houver)
-            $phone = preg_replace('/@.*$/', '', $validated['phone']);
+            $phone = $validated['phone'];
+
+            // Se parece ser um LID, buscar o JID real do contato
+            if (str_contains($phone, '@lid') || is_numeric($phone) && strlen($phone) > 15) {
+                // Buscar contato pelo phone_number ou jid
+                $contact = Contact::where('account_id', $account->id)
+                    ->where(function ($q) use ($phone) {
+                        $q->where('phone_number', $phone)
+                            ->orWhere('jid', $phone)
+                            ->orWhere('jid', $phone . '@s.whatsapp.net')
+                            ->orWhere('jid', $phone . '@lid');
+                    })
+                    ->first();
+
+                if ($contact && str_contains($contact->jid, '@s.whatsapp.net')) {
+                    $phone = preg_replace('/@.*$/', '', $contact->jid);
+                }
+            }
+
+            // Remover @s.whatsapp.net ou @lid se houver
+            $phone = preg_replace('/@.*$/', '', $phone);
 
             $result = $service->sendText(
                 $account->session_name,

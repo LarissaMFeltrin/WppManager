@@ -54,13 +54,17 @@ class ChatController extends Controller
             ->orderBy('name')
             ->get();
 
+        // Conversa a ser aberta automaticamente (vindo da fila ou link direto)
+        $conversaAbrir = $request->get('conversa');
+
         return view('admin.chat.index', compact(
             'conversas',
             'user',
             'filaCount',
             'maxSlots',
             'conversasAtivas',
-            'atendentes'
+            'atendentes',
+            'conversaAbrir'
         ));
     }
 

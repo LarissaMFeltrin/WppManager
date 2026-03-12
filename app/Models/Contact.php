@@ -23,6 +23,23 @@ class Contact extends Model
         'is_blocked' => 'boolean',
     ];
 
+    /**
+     * Accessor para phone - retorna phone_number ou extrai do JID
+     */
+    public function getPhoneAttribute(): ?string
+    {
+        if (!empty($this->phone_number)) {
+            return $this->phone_number;
+        }
+
+        // Extrair do JID se phone_number estiver vazio
+        if (!empty($this->jid)) {
+            return preg_replace('/@.*$/', '', $this->jid);
+        }
+
+        return null;
+    }
+
     public function account(): BelongsTo
     {
         return $this->belongsTo(WhatsappAccount::class, 'account_id');

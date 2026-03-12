@@ -1,3 +1,6 @@
+@php
+use App\Helpers\WhatsAppFormatter;
+@endphp
 @extends('adminlte::page')
 
 @section('title', 'Painel de Conversas')
@@ -192,6 +195,25 @@
     word-wrap: break-word;
     font-size: 0.9rem;
     line-height: 1.4;
+}
+
+.message-text .wa-code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.message-text .wa-code-block {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 10px;
+    border-radius: 5px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    margin: 5px 0;
+    white-space: pre-wrap;
+    overflow-x: auto;
 }
 
 .message-time {
@@ -981,7 +1003,7 @@
                                 <div class="message-text"><i class="fas fa-image"></i> Imagem</div>
                             @endif
                             @if($msg->message_text)
-                                <div class="message-text">{!! nl2br(e($msg->message_text)) !!}</div>
+                                <div class="message-text">{!! WhatsAppFormatter::format($msg->message_text) !!}</div>
                             @endif
                         @elseif($msg->message_type === 'video')
                             @if($msg->media_url)
@@ -992,7 +1014,7 @@
                                 <div class="message-text"><i class="fas fa-video"></i> Video</div>
                             @endif
                             @if($msg->message_text)
-                                <div class="message-text">{!! nl2br(e($msg->message_text)) !!}</div>
+                                <div class="message-text">{!! WhatsAppFormatter::format($msg->message_text) !!}</div>
                             @endif
                         @elseif($msg->message_type === 'audio')
                             @if($msg->media_url)
@@ -1027,7 +1049,7 @@
                                 <div class="message-text"><i class="fas fa-sticky-note"></i> Sticker</div>
                             @endif
                         @else
-                            <div class="message-text">{!! nl2br(e($msg->message_text)) !!}</div>
+                            <div class="message-text">{!! WhatsAppFormatter::format($msg->message_text) !!}</div>
                         @endif
 
                         @if($msg->reactions && count($msg->reactions) > 0)
@@ -1850,7 +1872,7 @@ function buildMessageHtml(msg, isGroup) {
             ? '<img src="' + msg.media_url + '" class="message-media-img" onclick="openImageModal(this.src)">'
             : '<div class="message-text"><i class="fas fa-image"></i> Imagem</div>';
         if (msg.message_text) {
-            content += '<div class="message-text">' + escapeHtml(msg.message_text).replace(/\n/g, '<br>') + '</div>';
+            content += '<div class="message-text">' + formatWhatsApp(msg.message_text) + '</div>';
         }
     } else if (msg.message_type === 'video') {
         content = msg.media_url
@@ -1873,7 +1895,7 @@ function buildMessageHtml(msg, isGroup) {
             '<div class="doc-info"><div class="doc-name">' + escapeHtml(docName) + '</div></div>' +
             '<i class="fas fa-download doc-download"></i></a>';
     } else {
-        content = '<div class="message-text">' + escapeHtml(msg.message_text || '').replace(/\n/g, '<br>') + '</div>';
+        content = '<div class="message-text">' + formatWhatsApp(msg.message_text || '') + '</div>';
     }
 
     // Reactions
@@ -1904,6 +1926,25 @@ function escapeHtml(text) {
     var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Formatar texto WhatsApp (negrito, itálico, etc)
+function formatWhatsApp(text) {
+    if (!text) return '';
+    var html = escapeHtml(text);
+    // Bloco de código
+    html = html.replace(/```([\s\S]*?)```/g, '<pre class="wa-code-block">$1</pre>');
+    // Código inline
+    html = html.replace(/`([^`]+)`/g, '<code class="wa-code">$1</code>');
+    // Negrito
+    html = html.replace(/\*([^\*]+)\*/g, '<strong>$1</strong>');
+    // Itálico
+    html = html.replace(/\_([^\_]+)\_/g, '<em>$1</em>');
+    // Tachado
+    html = html.replace(/\~([^\~]+)\~/g, '<s>$1</s>');
+    // Quebras de linha
+    html = html.replace(/\n/g, '<br>');
+    return html;
 }
 
 // Context menu actions
