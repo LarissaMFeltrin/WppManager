@@ -48,10 +48,16 @@
                                 <i class="fas fa-qrcode"></i> QR Code
                             </button>
                         @else
+                            <form action="{{ route('admin.whatsapp.restart', $account) }}" method="POST" class="d-inline">
+                                @csrf
+                                <button type="submit" class="btn btn-sm btn-info" title="Reconectar">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                            </form>
                             <form action="{{ route('admin.whatsapp.disconnect', $account) }}" method="POST" class="d-inline">
                                 @csrf
-                                <button type="submit" class="btn btn-sm btn-warning">
-                                    <i class="fas fa-sign-out-alt"></i> Desconectar
+                                <button type="submit" class="btn btn-sm btn-warning" title="Desconectar">
+                                    <i class="fas fa-sign-out-alt"></i>
                                 </button>
                             </form>
                         @endif
@@ -80,7 +86,7 @@
     </div>
     @if($accounts->hasPages())
     <div class="card-footer">
-        {{ $accounts->links() }}
+        {{ $accounts->links('pagination::bootstrap-4') }}
     </div>
     @endif
 </div>

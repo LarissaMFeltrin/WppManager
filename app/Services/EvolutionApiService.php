@@ -16,15 +16,17 @@ class EvolutionApiService
         $this->apiKey = config('services.evolution.api_key', '');
     }
 
-    protected function request(string $method, string $endpoint, array $data = []): array
+    protected function request(string $method, string $endpoint, array $data = [], int $timeout = 15): array
     {
         $url = $this->baseUrl . $endpoint;
 
         try {
-            $response = Http::withHeaders([
-                'apikey' => $this->apiKey,
-                'Content-Type' => 'application/json',
-            ])->{$method}($url, $data);
+            $response = Http::timeout($timeout)
+                ->connectTimeout(5)
+                ->withHeaders([
+                    'apikey' => $this->apiKey,
+                    'Content-Type' => 'application/json',
+                ])->{$method}($url, $data);
 
             if ($response->successful()) {
                 return [
@@ -136,15 +138,30 @@ class EvolutionApiService
 
     // === Mensagens ===
 
-    public function sendText(string $instanceName, string $number, string $text): array
+    public function sendText(string $instanceName, string $number, string $text, ?string $quotedMessageId = null, ?string $remoteJid = null, bool $quotedFromMe = false): array
     {
-        // Formato Evolution API v2.x
-        return $this->request('post', "/message/sendText/{$instanceName}", [
+        $payload = [
             'number' => $number,
             'textMessage' => [
                 'text' => $text,
             ],
-        ]);
+        ];
+
+        // Se tem mensagem citada, adicionar no payload
+        if ($quotedMessageId) {
+            // Formato para Evolution API v1.7.x
+            $payload['options'] = [
+                'quoted' => [
+                    'key' => [
+                        'remoteJid' => $remoteJid ?? ($number . '@s.whatsapp.net'),
+                        'fromMe' => $quotedFromMe,
+                        'id' => $quotedMessageId,
+                    ],
+                ],
+            ];
+        }
+
+        return $this->request('post', "/message/sendText/{$instanceName}", $payload);
     }
 
     public function sendMedia(string $instanceName, string $number, string $mediaType, string $mediaUrl, ?string $caption = null): array
@@ -260,14 +277,42 @@ class EvolutionApiService
         ]);
     }
 
-    public function sendReaction(string $instanceName, string $remoteJid, string $messageId, string $emoji): array
+    public function sendReaction(string $instanceName, string $remoteJid, string $messageId, string $emoji, bool $fromMe = false): array
     {
         return $this->request('post', "/message/sendReaction/{$instanceName}", [
+            'reactionMessage' => [
+                'key' => [
+                    'remoteJid' => $remoteJid,
+                    'id' => $messageId,
+                    'fromMe' => $fromMe,
+                ],
+                'reaction' => $emoji,
+            ],
+        ]);
+    }
+
+    public function editMessage(string $instanceName, string $remoteJid, string $messageId, string $newText): array
+    {
+        return $this->request('post', "/message/updateMessage/{$instanceName}", [
             'key' => [
                 'remoteJid' => $remoteJid,
                 'id' => $messageId,
+                'fromMe' => true,
             ],
-            'reaction' => $emoji,
+            'message' => [
+                'conversation' => $newText,
+            ],
+        ]);
+    }
+
+    public function deleteMessage(string $instanceName, string $remoteJid, string $messageId, bool $fromMe = true): array
+    {
+        return $this->request('delete', "/chat/deleteMessageForEveryone/{$instanceName}", [
+            'key' => [
+                'remoteJid' => $remoteJid,
+                'id' => $messageId,
+                'fromMe' => $fromMe,
+            ],
         ]);
     }
 
@@ -347,21 +392,21 @@ class EvolutionApiService
 
     // === Webhooks ===
 
-    public function setWebhook(string $instanceName, string $webhookUrl, array $events = []): array
+    public function setWebhook(string $instanceName, string $webhookUrl, array $events = [], bool $base64 = true): array
     {
         return $this->request('post', "/webhook/set/{$instanceName}", [
-            'webhook' => [
-                'enabled' => true,
-                'url' => $webhookUrl,
-                'events' => $events ?: [
-                    'QRCODE_UPDATED',
-                    'MESSAGES_UPSERT',
-                    'MESSAGES_UPDATE',
-                    'MESSAGES_DELETE',
-                    'SEND_MESSAGE',
-                    'CONNECTION_UPDATE',
-                    'PRESENCE_UPDATE',
-                ],
+            'enabled' => true,
+            'url' => $webhookUrl,
+            'webhookBase64' => $base64, // Envia base64 da mídia diretamente no webhook
+            'webhookByEvents' => false,
+            'events' => $events ?: [
+                'QRCODE_UPDATED',
+                'MESSAGES_UPSERT',
+                'MESSAGES_UPDATE',
+                'MESSAGES_DELETE',
+                'SEND_MESSAGE',
+                'CONNECTION_UPDATE',
+                'PRESENCE_UPDATE',
             ],
         ]);
     }
