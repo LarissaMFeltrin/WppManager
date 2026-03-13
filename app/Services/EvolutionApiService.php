@@ -277,18 +277,26 @@ class EvolutionApiService
         ]);
     }
 
-    public function sendReaction(string $instanceName, string $remoteJid, string $messageId, string $emoji, bool $fromMe = false): array
+    public function sendReaction(string $instanceName, string $remoteJid, string $messageId, string $emoji, bool $fromMe = false, ?string $participant = null): array
     {
+        $key = [
+            'remoteJid' => $remoteJid,
+            'id' => $messageId,
+            'fromMe' => $fromMe,
+        ];
+
+        // Para grupos, incluir participant
+        if ($participant) {
+            $key['participant'] = $participant;
+        }
+
+        // Timeout maior (30s) pois este endpoint pode ser lento na Evolution
         return $this->request('post', "/message/sendReaction/{$instanceName}", [
             'reactionMessage' => [
-                'key' => [
-                    'remoteJid' => $remoteJid,
-                    'id' => $messageId,
-                    'fromMe' => $fromMe,
-                ],
+                'key' => $key,
                 'reaction' => $emoji,
             ],
-        ]);
+        ], timeout: 30);
     }
 
     public function editMessage(string $instanceName, string $remoteJid, string $messageId, string $newText): array

@@ -20,36 +20,67 @@ class ContactController extends Controller
         $user = Auth::user();
         $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
 
-        $query = Contact::with('account')
-            ->whereIn('account_id', $accountIds);
+        $tipo = $request->input('tipo', 'individual'); // individual ou grupo
 
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('jid', 'like', "%{$search}%")
-                    ->orWhere('phone_number', 'like', "%{$search}%");
-            });
+        if ($tipo === 'grupo') {
+            // Buscar grupos (Chats com chat_type = group)
+            $query = Chat::with('account')
+                ->whereIn('account_id', $accountIds)
+                ->where('chat_type', 'group');
+
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('chat_name', 'like', "%{$search}%")
+                        ->orWhere('chat_id', 'like', "%{$search}%");
+                });
+            }
+
+            if ($request->filled('account_id')) {
+                $query->where('account_id', $request->account_id);
+            }
+
+            $groups = $query->orderByDesc('last_message_timestamp')->paginate(30)->withQueryString();
+            $contacts = collect(); // vazio
+        } else {
+            // Buscar contatos individuais
+            $query = Contact::with('account')
+                ->whereIn('account_id', $accountIds);
+
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('jid', 'like', "%{$search}%")
+                        ->orWhere('phone_number', 'like', "%{$search}%");
+                });
+            }
+
+            if ($request->filled('account_id')) {
+                $query->where('account_id', $request->account_id);
+            }
+
+            // Filtro para contatos sem nome
+            if ($request->filter === 'sem_nome') {
+                $query->where(function ($q) {
+                    $q->whereNull('name')
+                        ->orWhere('name', '')
+                        ->orWhere('name', 'Sem nome');
+                });
+            }
+
+            $contacts = $query->orderBy('name')->paginate(30)->withQueryString();
+            $groups = collect(); // vazio
         }
-
-        if ($request->filled('account_id')) {
-            $query->where('account_id', $request->account_id);
-        }
-
-        // Filtro para contatos sem nome
-        if ($request->filter === 'sem_nome') {
-            $query->where(function ($q) {
-                $q->whereNull('name')
-                    ->orWhere('name', '')
-                    ->orWhere('name', 'Sem nome');
-            });
-        }
-
-        $contacts = $query->orderBy('name')->paginate(30)->withQueryString();
 
         $accounts = WhatsappAccount::whereIn('id', $accountIds)->orderBy('session_name')->get();
 
-        return view('admin.contacts.index', compact('contacts', 'accounts'));
+        // Contagem de grupos para badge
+        $groupCount = Chat::whereIn('account_id', $accountIds)
+            ->where('chat_type', 'group')
+            ->count();
+
+        return view('admin.contacts.index', compact('contacts', 'groups', 'accounts', 'tipo', 'groupCount'));
     }
 
     public function edit(Contact $contact)
@@ -530,6 +561,7 @@ class ContactController extends Controller
     public function buscarChats(Request $request)
     {
         $termo = $request->input('termo', '');
+        $incluirGrupos = $request->boolean('incluir_grupos', false);
 
         if (strlen($termo) < 2) {
             return response()->json(['chats' => []]);
@@ -538,15 +570,20 @@ class ContactController extends Controller
         $user = Auth::user();
         $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id');
 
-        $chats = Chat::whereIn('account_id', $accountIds)
-            ->where('chat_type', 'individual')
+        $query = Chat::whereIn('account_id', $accountIds)
             ->where(function ($q) use ($termo) {
                 $q->where('chat_name', 'like', "%{$termo}%")
                     ->orWhere('chat_id', 'like', "%{$termo}%");
-            })
-            ->orderByDesc('last_message_timestamp')
+            });
+
+        // Filtrar por tipo se não incluir grupos
+        if (!$incluirGrupos) {
+            $query->where('chat_type', 'individual');
+        }
+
+        $chats = $query->orderByDesc('last_message_timestamp')
             ->take(10)
-            ->get(['id', 'chat_id', 'chat_name']);
+            ->get(['id', 'chat_id', 'chat_name', 'chat_type']);
 
         return response()->json(['chats' => $chats]);
     }
@@ -597,6 +634,61 @@ class ContactController extends Controller
             ]);
 
             // Incrementar contador de conversas ativas do usuário
+            $user->increment('conversas_ativas');
+        } else {
+            // Se existe e está aguardando, atribuir ao usuário atual
+            if ($conversa->status === 'aguardando') {
+                $conversa->update([
+                    'atendente_id' => $user->id,
+                    'status' => 'em_atendimento',
+                    'atendida_em' => now(),
+                ]);
+                $user->increment('conversas_ativas');
+            }
+        }
+
+        // Redirecionar para o Dashboard com a conversa aberta
+        return redirect()->route('admin.painel', ['conversa' => $conversa->id]);
+    }
+
+    /**
+     * Abrir conversa de grupo no Dashboard de Atendimento
+     */
+    public function abrirGrupo(Chat $chat)
+    {
+        $user = Auth::user();
+
+        // Verificar se o chat pertence à empresa do usuário
+        $accountIds = WhatsappAccount::where('empresa_id', $user->empresa_id)->pluck('id')->toArray();
+        if (!in_array($chat->account_id, $accountIds)) {
+            return redirect()->route('admin.contatos.index', ['tipo' => 'grupo'])
+                ->with('error', 'Acesso negado');
+        }
+
+        // Verificar se é realmente um grupo
+        if ($chat->chat_type !== 'group') {
+            return redirect()->route('admin.contatos.index', ['tipo' => 'grupo'])
+                ->with('error', 'Este chat não é um grupo');
+        }
+
+        // Buscar conversa existente em atendimento ou aguardando
+        $conversa = Conversa::where('chat_id', $chat->id)
+            ->whereIn('status', ['em_atendimento', 'aguardando'])
+            ->first();
+
+        // Se não existe, criar nova conversa
+        if (!$conversa) {
+            $conversa = Conversa::create([
+                'account_id' => $chat->account_id,
+                'chat_id' => $chat->id,
+                'cliente_numero' => preg_replace('/@.*$/', '', $chat->chat_id),
+                'cliente_nome' => $chat->chat_name ?: 'Grupo',
+                'status' => 'em_atendimento',
+                'atendente_id' => $user->id,
+                'atendida_em' => now(),
+                'ultima_msg_em' => now(),
+            ]);
+
             $user->increment('conversas_ativas');
         } else {
             // Se existe e está aguardando, atribuir ao usuário atual

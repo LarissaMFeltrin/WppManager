@@ -64,7 +64,23 @@
                             @error('file')
                                 <div class="text-danger small mt-1">{{ $message }}</div>
                             @enderror
+
+                            <!-- Barra de progresso do upload -->
+                            <div id="uploadProgress" class="mt-3" style="display: none;">
+                                <div class="d-flex justify-content-between mb-1">
+                                    <small class="text-muted" id="uploadStatus">Enviando arquivo...</small>
+                                    <small class="text-muted" id="uploadPercent">0%</small>
+                                </div>
+                                <div class="progress" style="height: 20px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="uploadProgressBar"
+                                         role="progressbar" style="width: 0%"></div>
+                                </div>
+                                <small class="text-muted" id="uploadDetails"></small>
+                            </div>
                         </div>
+
+                        <!-- Campo oculto para upload em chunks -->
+                        <input type="hidden" name="file_path" id="chunkedFilePath" value="">
 
                         <!-- Análise do arquivo -->
                         <div id="fileAnalysis" class="mb-4" style="display: none;">
@@ -238,7 +254,7 @@
                         <ul class="mb-0 mt-2 small">
                             <li><strong>.txt</strong> - Apenas texto</li>
                             <li><strong>.zip</strong> - Texto + mídias (fotos, áudios, vídeos)</li>
-                            <li>Máximo 500MB por arquivo</li>
+                            <li><strong>Sem limite de tamanho</strong> - arquivos grandes são enviados em partes</li>
                             <li>Mensagens duplicadas são ignoradas</li>
                         </ul>
                     </div>
@@ -391,8 +407,77 @@ function autoFillFields(data, filename, sendersList) {
     return autoFilled;
 }
 
-// Analisar arquivo de upload
-// Analisar arquivo ao clicar no botão
+// Configuração de chunks
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB por chunk
+
+// Gerar ID único para upload
+function generateUploadId() {
+    return 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+// Formatar tamanho de arquivo
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+// Upload em chunks
+async function uploadFileInChunks(file, onProgress) {
+    const uploadId = generateUploadId();
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    let uploadedChunks = 0;
+
+    console.log(`Iniciando upload em ${totalChunks} chunks de ${formatFileSize(CHUNK_SIZE)}`);
+
+    for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('chunk', chunk, 'chunk');
+        formData.append('chunk_index', i);
+        formData.append('total_chunks', totalChunks);
+        formData.append('upload_id', uploadId);
+        formData.append('filename', file.name);
+        formData.append('_token', '{{ csrf_token() }}');
+
+        const response = await fetch('{{ route("admin.import.chunk") }}', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+        if (!result.success) {
+            throw new Error(result.error || `Erro no chunk ${i}`);
+        }
+
+        uploadedChunks++;
+        const progress = Math.round((uploadedChunks / totalChunks) * 100);
+        onProgress(progress, uploadedChunks, totalChunks, end);
+    }
+
+    // Completar upload
+    const completeResponse = await fetch('{{ route("admin.import.chunk.complete") }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+        },
+        body: JSON.stringify({ upload_id: uploadId })
+    });
+
+    const completeResult = await completeResponse.json();
+    if (!completeResult.success) {
+        throw new Error(completeResult.error || 'Erro ao finalizar upload');
+    }
+
+    return completeResult;
+}
+
+// Analisar arquivo - usa chunks para arquivos grandes
 document.getElementById('analyzeBtn').addEventListener('click', async function() {
     const fileInput = document.getElementById('fileInput');
     const file = fileInput.files[0];
@@ -404,31 +489,86 @@ document.getElementById('analyzeBtn').addEventListener('click', async function()
 
     const btn = this;
     const btnIcon = document.getElementById('analyzeBtnIcon');
+    const progressDiv = document.getElementById('uploadProgress');
+    const progressBar = document.getElementById('uploadProgressBar');
+    const progressPercent = document.getElementById('uploadPercent');
+    const progressStatus = document.getElementById('uploadStatus');
+    const progressDetails = document.getElementById('uploadDetails');
 
     // Mostrar loading
     btn.disabled = true;
     btnIcon.className = 'fas fa-spinner fa-spin';
-
     document.getElementById('fileAnalysis').style.display = 'none';
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('_token', '{{ csrf_token() }}');
-
     try {
-        const response = await fetch('{{ route("admin.import.analyze") }}', {
-            method: 'POST',
-            body: formData
-        });
-        const data = await response.json();
-        if (data.success) {
-            displayAnalysisData(data, file.name);
+        // Arquivos > 50MB usam upload em chunks
+        if (file.size > 50 * 1024 * 1024) {
+            progressDiv.style.display = 'block';
+            progressStatus.textContent = 'Enviando arquivo...';
+            progressBar.style.width = '0%';
+            progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
+
+            const uploadResult = await uploadFileInChunks(file, (progress, uploaded, total, bytes) => {
+                progressBar.style.width = progress + '%';
+                progressPercent.textContent = progress + '%';
+                progressStatus.textContent = `Enviando parte ${uploaded} de ${total}...`;
+                progressDetails.textContent = `${formatFileSize(bytes)} de ${formatFileSize(file.size)}`;
+            });
+
+            progressStatus.textContent = 'Analisando arquivo...';
+            progressBar.style.width = '100%';
+            progressBar.className = 'progress-bar bg-info progress-bar-striped progress-bar-animated';
+
+            // Analisar arquivo no servidor
+            const analyzeResponse = await fetch('{{ route("admin.import.chunk.analyze") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                },
+                body: JSON.stringify({ upload_id: uploadResult.upload_id })
+            });
+
+            const data = await analyzeResponse.json();
+
+            if (data.success) {
+                progressBar.className = 'progress-bar bg-success';
+                progressStatus.textContent = 'Análise completa!';
+
+                // Guardar caminho do arquivo para importação
+                document.getElementById('chunkedFilePath').value = data.file_path;
+
+                displayAnalysisData(data, file.name);
+            } else {
+                throw new Error(data.error || 'Erro ao analisar arquivo');
+            }
+
         } else {
-            alert(data.error || 'Erro ao analisar arquivo');
+            // Arquivos pequenos: upload direto
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('_token', '{{ csrf_token() }}');
+
+            const response = await fetch('{{ route("admin.import.analyze") }}', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                displayAnalysisData(data, file.name);
+            } else {
+                alert(data.error || 'Erro ao analisar arquivo');
+            }
         }
     } catch (error) {
         console.error('Erro ao analisar arquivo:', error);
-        alert('Erro ao analisar arquivo. Tente novamente.');
+        alert('Erro: ' + error.message);
+
+        if (progressDiv) {
+            progressBar.className = 'progress-bar bg-danger';
+            progressStatus.textContent = 'Erro no upload';
+        }
     } finally {
         btn.disabled = false;
         btnIcon.className = 'fas fa-search';
@@ -475,6 +615,15 @@ document.getElementById('importForm').addEventListener('submit', function(e) {
     const submitIcon = document.getElementById('submitIcon');
     const submitText = document.getElementById('submitText');
     const loadingDiv = document.getElementById('importLoading');
+    const chunkedFilePath = document.getElementById('chunkedFilePath').value;
+    const fileInput = document.getElementById('fileInput');
+
+    // Se tem file_path de upload em chunks, limpar o file input para não enviar duplicado
+    if (chunkedFilePath) {
+        // Criar um novo DataTransfer vazio para limpar o input
+        const dt = new DataTransfer();
+        fileInput.files = dt.files;
+    }
 
     // Desabilitar botão e mostrar loading
     submitBtn.disabled = true;

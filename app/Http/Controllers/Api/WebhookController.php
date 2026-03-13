@@ -730,8 +730,10 @@ class WebhookController extends Controller
         // ID da mensagem que recebeu a reação
         $targetMessageId = $reactionMessage['key']['id'] ?? null;
         $emoji = $reactionMessage['text'] ?? null;
-        $fromJid = $data['key']['remoteJid'] ?? $data['key']['participant'] ?? null;
+        // Em grupos, usar participant (quem reagiu), não remoteJid (ID do grupo)
+        $fromJid = $data['key']['participant'] ?? $data['key']['remoteJid'] ?? null;
         $fromMe = $data['key']['fromMe'] ?? false;
+        $senderName = $data['pushName'] ?? null;
 
         if (!$targetMessageId) {
             return response()->json(['status' => 'ok']);
@@ -759,6 +761,7 @@ class WebhookController extends Controller
             $reactions[] = [
                 'emoji' => $emoji,
                 'from' => $fromMe ? 'me' : $fromJid,
+                'name' => $fromMe ? null : $senderName,
                 'timestamp' => time(),
             ];
         }
@@ -769,6 +772,7 @@ class WebhookController extends Controller
             'message_id' => $targetMessageId,
             'emoji' => $emoji,
             'from' => $fromJid,
+            'name' => $senderName,
         ]);
 
         return response()->json(['status' => 'ok']);
@@ -787,8 +791,10 @@ class WebhookController extends Controller
         // ID da mensagem que recebeu a reação
         $targetMessageId = $reactionMessage['key']['id'] ?? null;
         $emoji = $reactionMessage['text'] ?? null;
-        $fromJid = $key['remoteJid'] ?? $key['participant'] ?? null;
+        // Em grupos, usar participant (quem reagiu), não remoteJid (ID do grupo)
+        $fromJid = $key['participant'] ?? $key['remoteJid'] ?? null;
         $fromMe = $key['fromMe'] ?? false;
+        $senderName = $messageData['pushName'] ?? null;
 
         if (!$targetMessageId) {
             return;
@@ -817,6 +823,7 @@ class WebhookController extends Controller
             $reactions[] = [
                 'emoji' => $emoji,
                 'from' => $fromMe ? 'me' : $fromJid,
+                'name' => $fromMe ? null : $senderName,
                 'timestamp' => time(),
             ];
         }
@@ -827,6 +834,7 @@ class WebhookController extends Controller
             'message_id' => $targetMessageId,
             'emoji' => $emoji,
             'from' => $fromJid,
+            'name' => $senderName,
         ]);
     }
 

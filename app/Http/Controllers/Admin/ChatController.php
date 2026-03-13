@@ -140,8 +140,8 @@ class ChatController extends Controller
             ->where('atendente_id', $user->id)
             ->where('status', 'em_atendimento')
             ->with(['account', 'chat.messages' => function ($q) {
-                // Pega as 500 mais recentes (DESC) para depois inverter na view
-                $q->orderBy('timestamp', 'desc')->limit(500);
+                // Pega as 100 mais recentes (DESC) para depois inverter na view
+                $q->orderBy('timestamp', 'desc')->limit(100);
             }])
             ->orderBy('ultima_msg_em', 'desc')
             ->limit(8)
@@ -685,13 +685,20 @@ class ChatController extends Controller
 
         try {
             $jid = $conversa->chat->chat_id ?? ($conversa->cliente_numero . '@s.whatsapp.net');
+            $isGroup = str_contains($jid, '@g.us');
 
-            // Buscar mensagem para saber se é fromMe
+            // Buscar mensagem para saber se é fromMe e pegar participant (para grupos)
             $message = Message::where('message_key', $validated['message_key'])
                 ->orWhere('message_key', 'like', '%' . $validated['message_key'])
                 ->first();
 
             $fromMe = $message ? $message->is_from_me : false;
+            $participant = null;
+
+            // Para grupos, precisamos do participant da mensagem original
+            if ($isGroup && $message && !$fromMe) {
+                $participant = $message->participant_jid ?? $message->from_jid;
+            }
 
             // Tentar via Evolution primeiro
             $result = $this->evolution->sendReaction(
@@ -699,10 +706,24 @@ class ChatController extends Controller
                 $jid,
                 $validated['message_key'],
                 $validated['emoji'],
-                $fromMe
+                $fromMe,
+                $participant
             );
 
-            // Atualizar reações no banco (substituir reação anterior do mesmo remetente)
+            // Verificar se a API retornou sucesso
+            if (!($result['success'] ?? false)) {
+                Log::warning('Falha ao enviar reação via Evolution', [
+                    'jid' => $jid,
+                    'message_key' => $validated['message_key'],
+                    'error' => $result['error'] ?? 'Erro desconhecido',
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Falha ao enviar reação: ' . ($result['error'] ?? 'Erro desconhecido')
+                ], 400);
+            }
+
+            // Atualizar reações no banco apenas se a API teve sucesso
             if ($message) {
                 $reactions = $message->reactions ?? [];
 
@@ -891,23 +912,38 @@ class ChatController extends Controller
     public function mensagens(Request $request, Conversa $conversa)
     {
         if (!$conversa->chat) {
-            return response()->json(['messages' => []]);
+            return response()->json(['messages' => [], 'has_more' => false]);
         }
 
         $query = $conversa->chat->messages();
+        $limit = 100;
 
-        // Se passou after_id, retorna apenas mensagens mais novas
+        // Se passou after_id, retorna apenas mensagens mais novas (polling)
         $afterId = $request->query('after_id');
+        // Se passou before_id, retorna mensagens mais antigas (carregar mais)
+        $beforeId = $request->query('before_id');
+
         if ($afterId) {
             $query->where('id', '>', $afterId);
+            $limit = 50;
+        } elseif ($beforeId) {
+            $query->where('id', '<', $beforeId);
+            $limit = 50;
         }
 
+        // Buscar uma mensagem a mais para saber se tem mais
         $messages = $query
             ->orderBy('id', $afterId ? 'asc' : 'desc')
-            ->limit($afterId ? 100 : 500)
+            ->limit($limit + 1)
             ->get();
 
-        // Se não é busca incremental, inverte para ordem cronológica
+        // Verificar se há mais mensagens
+        $hasMore = $messages->count() > $limit;
+        if ($hasMore) {
+            $messages = $messages->take($limit);
+        }
+
+        // Se não é busca incremental (after_id), inverte para ordem cronológica
         if (!$afterId) {
             $messages = $messages->reverse();
         }
@@ -933,7 +969,10 @@ class ChatController extends Controller
             ];
         });
 
-        return response()->json(['messages' => $messages]);
+        return response()->json([
+            'messages' => $messages,
+            'has_more' => $hasMore,
+        ]);
     }
 
     /**

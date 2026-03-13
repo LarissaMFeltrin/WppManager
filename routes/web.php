@@ -103,6 +103,7 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::post('contatos/sincronizar', [ContactController::class, 'sincronizar'])->name('contatos.sincronizar');
     Route::post('contatos/enviar-mensagem', [ContactController::class, 'enviarMensagem'])->name('contatos.enviar-mensagem');
     Route::get('contatos/{contact}/conversa', [ContactController::class, 'abrirConversa'])->name('contatos.abrir-conversa');
+    Route::get('contatos/grupo/{chat}/abrir', [ContactController::class, 'abrirGrupo'])->name('contatos.abrir-grupo');
 
     // Logs
     Route::get('logs', [LogController::class, 'index'])->name('logs');
@@ -119,4 +120,13 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
         ->withoutMiddleware(\Illuminate\Http\Middleware\ValidatePostSize::class);
     Route::post('import/analyze-path', [ImportController::class, 'analyzePath'])
         ->name('import.analyzePath');
+
+    // Upload em chunks para arquivos grandes
+    Route::post('import/chunk', [ImportController::class, 'uploadChunk'])
+        ->name('import.chunk')
+        ->withoutMiddleware(\Illuminate\Http\Middleware\ValidatePostSize::class);
+    Route::post('import/chunk/complete', [ImportController::class, 'completeChunkUpload'])
+        ->name('import.chunk.complete');
+    Route::post('import/chunk/analyze', [ImportController::class, 'analyzeChunkedFile'])
+        ->name('import.chunk.analyze');
 });
