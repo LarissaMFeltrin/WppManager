@@ -271,6 +271,23 @@ use App\Helpers\WhatsAppFormatter;
     box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
 }
 
+/* Load more button */
+.btn-load-more {
+    font-size: 0.8rem;
+    padding: 6px 16px;
+    border-radius: 20px;
+    background: #f0f2f5;
+    border-color: #ddd;
+    color: #667781;
+}
+.btn-load-more:hover {
+    background: #e9ebee;
+    border-color: #ccc;
+}
+.btn-load-more:disabled {
+    opacity: 0.7;
+}
+
 /* Media */
 .message-media-img {
     max-width: 250px;
@@ -970,7 +987,19 @@ use App\Helpers\WhatsAppFormatter;
                     $lastDate = null;
                     // Inverte para ordem cronológica (antigas primeiro, novas no final)
                     $mensagens = $conversa->chat->messages->reverse();
+                    $carregadas = $mensagens->count();
+                    // Se carregou exatamente 100, provavelmente tem mais (evita COUNT query)
+                    $temMais = $carregadas >= 100;
                 @endphp
+                @if($temMais)
+                    <div class="text-center py-2" id="load-more-{{ $conversa->id }}">
+                        <button type="button" class="btn btn-sm btn-outline-secondary btn-load-more"
+                                onclick="loadMoreMessages({{ $conversa->id }})"
+                                data-conversa-id="{{ $conversa->id }}">
+                            <i class="fas fa-history"></i> Carregar mensagens anteriores
+                        </button>
+                    </div>
+                @endif
                 @foreach($mensagens as $msg)
                 @php $currentDate = $msg->message_date; @endphp
                 @if($currentDate !== $lastDate)
@@ -1055,7 +1084,10 @@ use App\Helpers\WhatsAppFormatter;
                         @if($msg->reactions && count($msg->reactions) > 0)
                             <div class="message-reactions">
                                 @foreach($msg->reactions as $reaction)
-                                    <span class="reaction">{{ $reaction['emoji'] }}</span>
+                                    @php
+                                        $reactionBy = $reaction['from'] === 'me' ? 'Voce' : ($reaction['name'] ?? 'Alguem');
+                                    @endphp
+                                    <span class="reaction" title="{{ $reactionBy }}">{{ $reaction['emoji'] }}</span>
                                 @endforeach
                             </div>
                         @endif
@@ -1860,58 +1892,76 @@ $(function() {
         });
     });
 
-    // Auto-refresh every 5 seconds - buscar mensagens novas
+    // Auto-refresh de mensagens - versão leve
+    // Busca mensagens novas uma conversa por vez a cada 10 segundos
+    // NOTA: Para grupos grandes com histórico importado, pode desabilitar
+    var pollingIndex = 0;
+    var pollingActive = false;
     setInterval(function() {
-        $('.chat-column').each(function() {
-            var conversaId = $(this).data('conversa-id');
-            var container = $('#messages-' + conversaId);
-            var isGroup = $(this).data('is-group') === 1;
+        // Não faz polling se a aba não estiver visível ou já tem um em andamento
+        if (document.hidden || pollingActive) return;
 
-            // Pegar o ID da última mensagem (id do banco, não message_key)
-            var lastMsg = container.find('.message').last();
-            var lastMsgId = lastMsg.data('msg-id') || 0;
+        var columns = $('.chat-column');
+        if (columns.length === 0) return;
 
-            $.ajax({
-                url: '/admin/painel/' + conversaId + '/mensagens',
-                method: 'GET',
-                data: lastMsgId ? { after_id: lastMsgId } : {},
-                success: function(response) {
-                    if (!response.messages || response.messages.length === 0) return;
+        // Pega uma conversa por vez (round-robin)
+        pollingIndex = pollingIndex % columns.length;
+        var column = $(columns[pollingIndex]);
+        pollingIndex++;
 
-                    // Se não temos lastMsgId, é carregamento inicial - não faz nada
-                    if (!lastMsgId) return;
+        var conversaId = column.data('conversa-id');
+        var container = $('#messages-' + conversaId);
+        var isGroup = column.data('is-group') === 1;
 
-                    var lastDate = container.find('.message-date-separator').last().find('span').text() || null;
+        // Pular grupos para evitar problemas com histórico importado
+        if (isGroup) return;
 
-                    // Adicionar apenas as mensagens novas
-                    var hasNewClientMessage = false;
-                    var lastClientTimestamp = null;
-                    response.messages.forEach(function(msg) {
-                        // Verificar se já não existe no container
-                        if (container.find('[data-msg-id="' + msg.id + '"]').length === 0) {
-                            if (msg.message_date && msg.message_date !== lastDate) {
-                                container.append('<div class="message-date-separator"><span>' + msg.message_date + '</span></div>');
-                                lastDate = msg.message_date;
-                            }
-                            container.append(buildMessageHtml(msg, isGroup));
+        var lastMsg = container.find('.message').last();
+        var lastMsgId = lastMsg.data('msg-id') || 0;
 
-                            // Verificar se é mensagem do cliente
-                            if (!msg.is_from_me) {
-                                hasNewClientMessage = true;
-                                lastClientTimestamp = msg.timestamp;
-                            }
+        if (!lastMsgId) return;
+
+        pollingActive = true;
+
+        $.ajax({
+            url: '/admin/painel/' + conversaId + '/mensagens',
+            method: 'GET',
+            data: { after_id: lastMsgId },
+            timeout: 5000, // Timeout de 5 segundos
+            success: function(response) {
+                if (!response.messages || response.messages.length === 0) return;
+
+                var lastDate = container.find('.message-date-separator').last().find('span').text() || null;
+                var hasNewClientMessage = false;
+                var lastClientTimestamp = null;
+
+                response.messages.forEach(function(msg) {
+                    if (container.find('[data-msg-id="' + msg.id + '"]').length === 0) {
+                        if (msg.message_date && msg.message_date !== lastDate) {
+                            container.append('<div class="message-date-separator"><span>' + msg.message_date + '</span></div>');
+                            lastDate = msg.message_date;
                         }
-                    });
-                    container[0].scrollTop = container[0].scrollHeight;
+                        container.append(buildMessageHtml(msg, isGroup));
 
-                    // Atualizar estado de aguardando se recebeu mensagem do cliente
-                    if (hasNewClientMessage && lastClientTimestamp) {
-                        setWaitingState(conversaId, lastClientTimestamp);
+                        if (!msg.is_from_me) {
+                            hasNewClientMessage = true;
+                            lastClientTimestamp = msg.timestamp;
+                        }
                     }
+                });
+
+                // Scroll suave para o final
+                container.animate({ scrollTop: container[0].scrollHeight }, 200);
+
+                if (hasNewClientMessage && lastClientTimestamp) {
+                    setWaitingState(conversaId, lastClientTimestamp);
                 }
-            });
+            },
+            complete: function() {
+                pollingActive = false;
+            }
         });
-    }, 5000);
+    }, 10000); // Polling a cada 10 segundos (uma conversa por vez)
 });
 
 function refreshChat(conversaId) {
@@ -1922,7 +1972,12 @@ function refreshChat(conversaId) {
         url: '/admin/painel/' + conversaId + '/mensagens',
         method: 'GET',
         success: function(response) {
+            // Preservar o botão "Carregar mais" se existir
+            var loadMoreBtn = $('#load-more-' + conversaId);
             container.empty();
+            if (loadMoreBtn.length && response.has_more) {
+                container.append(loadMoreBtn);
+            }
             var lastDate = null;
             response.messages.forEach(function(msg) {
                 // Adicionar separador de data se mudou
@@ -1933,6 +1988,67 @@ function refreshChat(conversaId) {
                 container.append(buildMessageHtml(msg, isGroup));
             });
             container[0].scrollTop = container[0].scrollHeight;
+        }
+    });
+}
+
+function loadMoreMessages(conversaId) {
+    var container = $('#messages-' + conversaId);
+    var isGroup = container.closest('.chat-column').data('is-group') === 1;
+    var loadMoreDiv = $('#load-more-' + conversaId);
+    var btn = loadMoreDiv.find('button');
+
+    // Pegar o ID da primeira mensagem visível (mais antiga carregada)
+    var firstMsg = container.find('.message').first();
+    var beforeId = firstMsg.data('msg-id');
+
+    if (!beforeId) {
+        loadMoreDiv.remove();
+        return;
+    }
+
+    // Mostrar loading
+    btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Carregando...');
+
+    $.ajax({
+        url: '/admin/painel/' + conversaId + '/mensagens',
+        method: 'GET',
+        data: { before_id: beforeId },
+        success: function(response) {
+            if (response.messages.length === 0) {
+                loadMoreDiv.remove();
+                return;
+            }
+
+            // Guardar posição do scroll
+            var scrollHeight = container[0].scrollHeight;
+
+            // Adicionar mensagens no início (após o botão)
+            var lastDate = null;
+            var insertPoint = loadMoreDiv.length ? loadMoreDiv : container.children().first();
+
+            response.messages.forEach(function(msg) {
+                // Adicionar separador de data se mudou
+                if (msg.message_date && msg.message_date !== lastDate) {
+                    $('<div class="message-date-separator"><span>' + msg.message_date + '</span></div>').insertAfter(loadMoreDiv.length ? loadMoreDiv : insertPoint);
+                    lastDate = msg.message_date;
+                }
+                $(buildMessageHtml(msg, isGroup)).insertAfter(loadMoreDiv.length ? loadMoreDiv : insertPoint);
+            });
+
+            // Manter posição do scroll relativa
+            container[0].scrollTop = container[0].scrollHeight - scrollHeight;
+
+            // Atualizar ou remover botão
+            if (response.has_more) {
+                btn.prop('disabled', false).html('<i class="fas fa-history"></i> Carregar mais');
+            } else {
+                loadMoreDiv.remove();
+            }
+        },
+        error: function() {
+            btn.prop('disabled', false).html('<i class="fas fa-history"></i> Carregar mais');
+            showToast('Erro ao carregar mensagens', 'error');
         }
     });
 }
@@ -1992,7 +2108,8 @@ function buildMessageHtml(msg, isGroup) {
     if (msg.reactions && msg.reactions.length > 0) {
         reactionsHtml = '<div class="message-reactions">';
         msg.reactions.forEach(function(r) {
-            reactionsHtml += '<span class="reaction">' + r.emoji + '</span>';
+            var reactionBy = r.from === 'me' ? 'Voce' : (r.name || 'Alguem');
+            reactionsHtml += '<span class="reaction" title="' + reactionBy + '">' + r.emoji + '</span>';
         });
         reactionsHtml += '</div>';
     }

@@ -83,7 +83,12 @@ class ImportController extends Controller
 
         // Determinar JID baseado no tipo
         if ($isGroup) {
-            $groupId = $request->phone ? preg_replace('/\D/', '', $request->phone) : null;
+            $groupId = $request->phone ?? '';
+            // Remover sufixos se o usuário colou o JID completo
+            $groupId = preg_replace('/@(g\.us|s\.whatsapp\.net)$/', '', $groupId);
+            // Manter apenas números e hífen (formato: numero-timestamp)
+            $groupId = preg_replace('/[^\d-]/', '', $groupId);
+
             if (!$groupId) {
                 // Gerar ID único para o grupo se não informado
                 $groupId = preg_replace('/\D/', '', $account->phone_number) . '-' . time();
@@ -937,5 +942,226 @@ class ImportController extends Controller
         $content = preg_replace('/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/u', '', $content);
 
         return $content;
+    }
+
+    /**
+     * Upload de chunk (parte do arquivo)
+     */
+    public function uploadChunk(Request $request)
+    {
+        try {
+            $request->validate([
+                'chunk' => 'required',
+                'chunk_index' => 'required|integer|min:0',
+                'total_chunks' => 'required|integer|min:1',
+                'upload_id' => 'required|string',
+                'filename' => 'required|string',
+            ]);
+
+            $uploadId = $request->input('upload_id');
+            $chunkIndex = $request->input('chunk_index');
+            $totalChunks = $request->input('total_chunks');
+            $filename = $request->input('filename');
+
+            // Criar pasta temporária para chunks
+            $chunksPath = storage_path("app/temp/chunks/{$uploadId}");
+            if (!is_dir($chunksPath)) {
+                mkdir($chunksPath, 0755, true);
+            }
+
+            // Salvar chunk
+            $chunkFile = $request->file('chunk');
+            $chunkFile->move($chunksPath, "chunk_{$chunkIndex}");
+
+            // Salvar metadados
+            $metaFile = "{$chunksPath}/meta.json";
+            $meta = file_exists($metaFile) ? json_decode(file_get_contents($metaFile), true) : [];
+            $meta['filename'] = $filename;
+            $meta['total_chunks'] = $totalChunks;
+            $meta['received_chunks'] = ($meta['received_chunks'] ?? 0) + 1;
+            $meta['chunks_received'][$chunkIndex] = true;
+            file_put_contents($metaFile, json_encode($meta));
+
+            Log::info('Chunk recebido', [
+                'upload_id' => $uploadId,
+                'chunk' => $chunkIndex + 1,
+                'total' => $totalChunks,
+                'received' => $meta['received_chunks'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'chunk_index' => $chunkIndex,
+                'received' => $meta['received_chunks'],
+                'total' => $totalChunks,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro no upload de chunk', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Completar upload em chunks (juntar todas as partes)
+     */
+    public function completeChunkUpload(Request $request)
+    {
+        try {
+            $request->validate([
+                'upload_id' => 'required|string',
+            ]);
+
+            $uploadId = $request->input('upload_id');
+            $chunksPath = storage_path("app/temp/chunks/{$uploadId}");
+            $metaFile = "{$chunksPath}/meta.json";
+
+            if (!file_exists($metaFile)) {
+                return response()->json(['success' => false, 'error' => 'Upload não encontrado']);
+            }
+
+            $meta = json_decode(file_get_contents($metaFile), true);
+            $totalChunks = $meta['total_chunks'];
+            $filename = $meta['filename'];
+
+            // Verificar se todos os chunks foram recebidos
+            if (($meta['received_chunks'] ?? 0) < $totalChunks) {
+                return response()->json([
+                    'success' => false,
+                    'error' => "Faltam chunks: {$meta['received_chunks']}/{$totalChunks}",
+                ]);
+            }
+
+            // Juntar todos os chunks
+            $finalPath = storage_path("app/temp/uploads/{$uploadId}");
+            if (!is_dir($finalPath)) {
+                mkdir($finalPath, 0755, true);
+            }
+
+            $finalFile = "{$finalPath}/{$filename}";
+            $output = fopen($finalFile, 'wb');
+
+            for ($i = 0; $i < $totalChunks; $i++) {
+                $chunkPath = "{$chunksPath}/chunk_{$i}";
+                if (!file_exists($chunkPath)) {
+                    fclose($output);
+                    return response()->json(['success' => false, 'error' => "Chunk {$i} não encontrado"]);
+                }
+                $chunk = fopen($chunkPath, 'rb');
+                stream_copy_to_stream($chunk, $output);
+                fclose($chunk);
+            }
+
+            fclose($output);
+
+            // Limpar chunks
+            $this->deleteDirectory($chunksPath);
+
+            Log::info('Upload em chunks completo', [
+                'upload_id' => $uploadId,
+                'filename' => $filename,
+                'size' => filesize($finalFile),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'upload_id' => $uploadId,
+                'filename' => $filename,
+                'file_path' => $finalFile,
+                'size' => filesize($finalFile),
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro ao completar upload', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Analisar arquivo enviado em chunks
+     */
+    public function analyzeChunkedFile(Request $request)
+    {
+        try {
+            $request->validate([
+                'upload_id' => 'required|string',
+            ]);
+
+            $uploadId = $request->input('upload_id');
+            $uploadPath = storage_path("app/temp/uploads/{$uploadId}");
+
+            // Encontrar o arquivo
+            $files = glob("{$uploadPath}/*");
+            if (empty($files)) {
+                return response()->json(['success' => false, 'error' => 'Arquivo não encontrado']);
+            }
+
+            $filePath = $files[0];
+            $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+
+            if (!in_array($extension, ['txt', 'zip'])) {
+                return response()->json(['success' => false, 'error' => 'Arquivo deve ser .txt ou .zip']);
+            }
+
+            // Processar arquivo
+            if ($extension === 'zip') {
+                $result = $this->processZipFilePath($filePath);
+                if (!$result['success']) {
+                    return response()->json(['success' => false, 'error' => $result['error']]);
+                }
+                $content = $result['content'];
+                $mediaCount = count($result['media_files']);
+                $this->extractedPath = $result['extracted_path'];
+                $this->cleanupExtractedFiles();
+            } else {
+                $content = file_get_contents($filePath);
+                $mediaCount = 0;
+            }
+
+            $messages = $this->parseWhatsAppExport($content);
+
+            // Extrair remetentes únicos
+            $senders = [];
+            foreach ($messages as $msg) {
+                $sender = $msg['sender'];
+                $senders[$sender] = ($senders[$sender] ?? 0) + 1;
+            }
+
+            // Encontrar período
+            $timestamps = array_column($messages, 'timestamp');
+            $minTimestamp = !empty($timestamps) ? min($timestamps) : null;
+            $maxTimestamp = !empty($timestamps) ? max($timestamps) : null;
+            $minDate = $minTimestamp ? Carbon::createFromTimestamp($minTimestamp)->format('d/m/Y') : null;
+            $maxDate = $maxTimestamp ? Carbon::createFromTimestamp($maxTimestamp)->format('d/m/Y') : null;
+            $minDateIso = $minTimestamp ? Carbon::createFromTimestamp($minTimestamp)->format('Y-m-d') : null;
+            $maxDateIso = $maxTimestamp ? Carbon::createFromTimestamp($maxTimestamp)->format('Y-m-d') : null;
+
+            // Agrupar mensagens por data
+            $messagesByDate = [];
+            foreach ($messages as $msg) {
+                $date = Carbon::createFromTimestamp($msg['timestamp'])->format('Y-m-d');
+                $messagesByDate[$date] = ($messagesByDate[$date] ?? 0) + 1;
+            }
+
+            return response()->json([
+                'success' => true,
+                'upload_id' => $uploadId,
+                'file_path' => $filePath,
+                'total_messages' => count($messages),
+                'senders' => $senders,
+                'media_files' => $mediaCount,
+                'period' => [
+                    'start' => $minDate,
+                    'end' => $maxDate,
+                    'start_iso' => $minDateIso,
+                    'end_iso' => $maxDateIso,
+                ],
+                'messages_by_date' => $messagesByDate,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro ao analisar arquivo chunked', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+        }
     }
 }

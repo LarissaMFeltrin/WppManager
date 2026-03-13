@@ -146,19 +146,35 @@
 @section('content')
 {{-- Header com Filtros --}}
 <div class="contatos-header">
-    <div class="titulo">
-        <i class="fas fa-address-book"></i>
-        Contatos
-    </div>
+    {{-- Abas Contatos/Grupos --}}
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <a class="nav-link {{ $tipo === 'individual' ? 'active' : '' }}"
+               href="{{ route('admin.contatos.index', ['tipo' => 'individual']) }}">
+                <i class="fas fa-user"></i> Contatos
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {{ $tipo === 'grupo' ? 'active' : '' }}"
+               href="{{ route('admin.contatos.index', ['tipo' => 'grupo']) }}">
+                <i class="fas fa-users"></i> Grupos
+                @if($groupCount > 0)
+                    <span class="badge badge-info">{{ $groupCount }}</span>
+                @endif
+            </a>
+        </li>
+    </ul>
 
     <form action="" method="GET" class="filtros-bar">
+        <input type="hidden" name="tipo" value="{{ $tipo }}">
         @if(request('filter'))
             <input type="hidden" name="filter" value="{{ request('filter') }}">
         @endif
         <div class="search-box">
             <i class="fas fa-search"></i>
             <input type="text" name="search" class="form-control"
-                   value="{{ request('search') }}" placeholder="Buscar por nome ou numero...">
+                   value="{{ request('search') }}"
+                   placeholder="{{ $tipo === 'grupo' ? 'Buscar grupo...' : 'Buscar por nome ou numero...' }}">
         </div>
         <div class="select-instancia">
             <select name="account_id" class="form-control">
@@ -173,15 +189,17 @@
         <button type="submit" class="btn btn-success">
             <i class="fas fa-filter"></i> Filtrar
         </button>
-        <a href="{{ route('admin.contatos.index') }}" class="btn btn-light">
+        <a href="{{ route('admin.contatos.index', ['tipo' => $tipo]) }}" class="btn btn-light">
             <i class="fas fa-times"></i> Limpar
         </a>
+        @if($tipo === 'individual')
         <a href="{{ route('admin.contatos.sincronizar.page') }}" class="btn btn-info ml-3">
             <i class="fas fa-sync"></i> Sincronizar
         </a>
         <a href="{{ route('admin.contatos.duplicados') }}" class="btn btn-warning ml-2">
             <i class="fas fa-users"></i> Duplicados
         </a>
+        @endif
     </form>
 </div>
 
@@ -199,61 +217,117 @@
 @endif
 
 {{-- Tabela de Contatos --}}
-@if($contacts->count() > 0)
-<div class="contatos-table">
-    <table class="table">
-        <thead>
-            <tr>
-                <th>Nome</th>
-                <th>Numero</th>
-                <th>Instancia</th>
-                <th>Bloqueado</th>
-                <th width="150"></th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach($contacts as $contact)
-            <tr>
-                <td>
-                    <a href="{{ route('admin.contatos.edit', $contact) }}" class="nome-link">
-                        {{ $contact->name ?? 'Sem nome' }}
-                    </a>
-                </td>
-                <td>{{ $contact->phone }}</td>
-                <td>{{ $contact->account?->session_name ?? '-' }}</td>
-                <td>
-                    @if($contact->is_blocked)
-                        <span class="badge badge-danger badge-bloqueado">Sim</span>
-                    @else
-                        <span class="badge badge-danger badge-bloqueado">Nao</span>
-                    @endif
-                </td>
-                <td>
-                    <a href="{{ route('admin.contatos.abrir-conversa', $contact) }}"
-                       class="btn btn-success btn-enviar">
-                        <i class="fas fa-comments"></i> Abrir Conversa
-                    </a>
-                </td>
-            </tr>
-            @endforeach
-        </tbody>
-    </table>
+@if($tipo === 'individual')
+    @if($contacts->count() > 0)
+    <div class="contatos-table">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Numero</th>
+                    <th>Instancia</th>
+                    <th>Bloqueado</th>
+                    <th width="150"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach($contacts as $contact)
+                <tr>
+                    <td>
+                        <a href="{{ route('admin.contatos.edit', $contact) }}" class="nome-link">
+                            {{ $contact->name ?? 'Sem nome' }}
+                        </a>
+                    </td>
+                    <td>{{ $contact->phone }}</td>
+                    <td>{{ $contact->account?->session_name ?? '-' }}</td>
+                    <td>
+                        @if($contact->is_blocked)
+                            <span class="badge badge-danger badge-bloqueado">Sim</span>
+                        @else
+                            <span class="badge badge-danger badge-bloqueado">Nao</span>
+                        @endif
+                    </td>
+                    <td>
+                        <a href="{{ route('admin.contatos.abrir-conversa', $contact) }}"
+                           class="btn btn-success btn-enviar">
+                            <i class="fas fa-comments"></i> Abrir Conversa
+                        </a>
+                    </td>
+                </tr>
+                @endforeach
+            </tbody>
+        </table>
 
-    @if($contacts->hasPages())
-    <div class="card-footer d-flex justify-content-center">
-        {{ $contacts->appends(request()->query())->links('pagination::bootstrap-4') }}
+        @if($contacts->hasPages())
+        <div class="card-footer d-flex justify-content-center">
+            {{ $contacts->appends(request()->query())->links('pagination::bootstrap-4') }}
+        </div>
+        @endif
+    </div>
+    @else
+    <div class="contatos-vazio">
+        <i class="fas fa-address-book"></i>
+        <h4>Nenhum contato encontrado</h4>
+        <p class="text-muted">Sincronize os contatos de uma instancia WhatsApp.</p>
+        <button class="btn btn-success mt-3" data-toggle="modal" data-target="#sincronizarModal">
+            <i class="fas fa-sync"></i> Sincronizar Contatos
+        </button>
     </div>
     @endif
-</div>
 @else
-<div class="contatos-vazio">
-    <i class="fas fa-address-book"></i>
-    <h4>Nenhum contato encontrado</h4>
-    <p class="text-muted">Sincronize os contatos de uma instancia WhatsApp.</p>
-    <button class="btn btn-success mt-3" data-toggle="modal" data-target="#sincronizarModal">
-        <i class="fas fa-sync"></i> Sincronizar Contatos
-    </button>
-</div>
+    {{-- Tabela de Grupos --}}
+    @if($groups->count() > 0)
+    <div class="contatos-table">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Nome do Grupo</th>
+                    <th>ID</th>
+                    <th>Instancia</th>
+                    <th>Ultima Mensagem</th>
+                    <th width="150"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach($groups as $group)
+                <tr>
+                    <td>
+                        <i class="fas fa-users text-info mr-2"></i>
+                        <span class="nome-link">{{ $group->chat_name ?? 'Grupo sem nome' }}</span>
+                    </td>
+                    <td><small class="text-muted">{{ $group->chat_id }}</small></td>
+                    <td>{{ $group->account?->session_name ?? '-' }}</td>
+                    <td>
+                        @if($group->last_message_timestamp)
+                            {{ \Carbon\Carbon::createFromTimestamp($group->last_message_timestamp)->diffForHumans() }}
+                        @else
+                            -
+                        @endif
+                    </td>
+                    <td>
+                        <a href="{{ route('admin.contatos.abrir-grupo', $group) }}"
+                           class="btn btn-success btn-enviar">
+                            <i class="fas fa-comments"></i> Abrir Conversa
+                        </a>
+                    </td>
+                </tr>
+                @endforeach
+            </tbody>
+        </table>
+
+        @if($groups->hasPages())
+        <div class="card-footer d-flex justify-content-center">
+            {{ $groups->appends(request()->query())->links('pagination::bootstrap-4') }}
+        </div>
+        @endif
+    </div>
+    @else
+    <div class="contatos-vazio">
+        <i class="fas fa-users"></i>
+        <h4>Nenhum grupo encontrado</h4>
+        <p class="text-muted">Grupos aparecerao aqui quando voce receber mensagens de grupos ou importar historico.</p>
+    </div>
+    @endif
 @endif
 
 {{-- Modal Sincronizar --}}
