@@ -91,7 +91,7 @@ class WhatsappAccountController extends Controller
     {
         try {
             $service = app(EvolutionApiService::class);
-            $result = $service->connect($whatsapp->session_name);
+            $result = $service->connectInstance($whatsapp->session_name);
 
             return response()->json($result);
         } catch (\Exception $e) {
@@ -103,7 +103,7 @@ class WhatsappAccountController extends Controller
     {
         try {
             $service = app(EvolutionApiService::class);
-            $result = $service->logout($whatsapp->session_name);
+            $result = $service->disconnectInstance($whatsapp->session_name);
 
             $whatsapp->update(['is_connected' => false]);
 
@@ -120,6 +120,34 @@ class WhatsappAccountController extends Controller
         try {
             $service = app(EvolutionApiService::class);
             $result = $service->getQrCode($whatsapp->session_name);
+
+            return response()->json($result);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Conectar via Pairing Code (número de telefone)
+     * Retorna um código de 8 dígitos para inserir no WhatsApp
+     */
+    public function pairingCode(Request $request, WhatsappAccount $whatsapp)
+    {
+        $validated = $request->validate([
+            'phone_number' => 'required|string|min:10|max:20',
+        ]);
+
+        try {
+            $service = app(EvolutionApiService::class);
+            $result = $service->connectWithPairingCode(
+                $whatsapp->session_name,
+                $validated['phone_number']
+            );
+
+            // Salvar o número na instância para referência
+            if ($result['success']) {
+                $whatsapp->update(['phone_number' => $validated['phone_number']]);
+            }
 
             return response()->json($result);
         } catch (\Exception $e) {

@@ -228,56 +228,67 @@ class WebhookController extends Controller
             // Usar o chat principal ao invés de criar novo
             $chat = $alias->primaryChat;
         } else {
-            // Se é um LID sem alias cadastrado E é mensagem enviada (fromMe)
-            // Ignorar a mensagem pois não sabemos para qual contato real foi
-            if ($isLid && $fromMe) {
-                Log::warning('Mensagem fromMe com LID sem alias - ignorando', [
-                    'remoteJid' => $remoteJid,
-                    'messageId' => $messageId,
-                    'pushName' => $senderName,
-                    'tip' => 'Envie uma mensagem pelo sistema ou aguarde o contato responder para criar o alias correto',
-                ]);
-                return;
-            }
+            // Se é um LID sem alias, tentar resolver usando remoteJidAlt (número real)
+            // NUNCA usar nome do contato para resolver - nomes não são únicos e causam corrupção de dados
+            if ($isLid) {
+                // Verificar se o payload contém o JID real (remoteJidAlt)
+                $remoteJidAlt = $key['remoteJidAlt']
+                    ?? $messageData['remoteJidAlt']
+                    ?? null;
 
-            // Se é um LID sem alias e mensagem RECEBIDA, tentar criar alias automaticamente
-            if ($isLid && !$fromMe && $senderName) {
-                // Buscar chat existente com mesmo pushName (pode ser o mesmo contato com JID diferente)
-                $existingChat = Chat::where('account_id', $account->id)
-                    ->where('chat_type', 'individual')
-                    ->where('chat_name', $senderName)
-                    ->where('chat_id', 'like', '%@s.whatsapp.net')
-                    ->first();
+                if ($remoteJidAlt && str_contains($remoteJidAlt, '@s.whatsapp.net')) {
+                    // Temos o número real - buscar ou criar chat com o JID correto
+                    $existingChat = Chat::where('account_id', $account->id)
+                        ->where('chat_id', $remoteJidAlt)
+                        ->first();
 
-                if ($existingChat) {
-                    // Criar alias do LID para o chat existente
-                    ContactAlias::create([
-                        'account_id' => $account->id,
-                        'alias_jid' => $remoteJid,
-                        'primary_chat_id' => $existingChat->id,
-                    ]);
+                    if (!$existingChat) {
+                        $existingChat = Chat::create([
+                            'account_id' => $account->id,
+                            'chat_id' => $remoteJidAlt,
+                            'chat_name' => $senderName ?? $this->extractPhoneFromJid($remoteJidAlt),
+                            'chat_type' => 'individual',
+                        ]);
+                    }
 
-                    Log::info('Alias criado automaticamente para LID', [
+                    // Criar alias LID -> chat real
+                    ContactAlias::firstOrCreate(
+                        ['account_id' => $account->id, 'alias_jid' => $remoteJid],
+                        ['primary_chat_id' => $existingChat->id]
+                    );
+
+                    Log::info('Alias LID criado via remoteJidAlt', [
                         'lid' => $remoteJid,
-                        'primary_chat' => $existingChat->chat_id,
-                        'chat_name' => $senderName,
+                        'real_jid' => $remoteJidAlt,
+                        'chat_id' => $existingChat->id,
                     ]);
 
                     $chat = $existingChat;
                 } else {
-                    // Não existe chat com esse nome, criar novo chat com o LID
-                    // Isso vai criar um chat temporário até identificarmos o número real
-                    $chat = Chat::create([
-                        'account_id' => $account->id,
-                        'chat_id' => $remoteJid,
-                        'chat_name' => $senderName ?? 'LID: ' . $this->extractPhoneFromJid($remoteJid),
-                        'chat_type' => 'individual',
-                    ]);
+                    // Sem remoteJidAlt - se fromMe, ignorar (não sabemos o destinatário real)
+                    if ($fromMe) {
+                        Log::warning('Mensagem fromMe com LID sem alias e sem remoteJidAlt - ignorando', [
+                            'lid' => $remoteJid,
+                            'messageId' => $messageId,
+                        ]);
+                        return;
+                    }
 
-                    Log::warning('Chat criado para LID sem correspondência', [
+                    // Mensagem recebida: criar chat temporário com LID
+                    // Será mesclado manualmente ou quando remoteJidAlt estiver disponível
+                    $chat = Chat::firstOrCreate(
+                        ['account_id' => $account->id, 'chat_id' => $remoteJid],
+                        [
+                            'chat_name' => $senderName ?? 'LID: ' . $this->extractPhoneFromJid($remoteJid),
+                            'chat_type' => 'individual',
+                        ]
+                    );
+
+                    Log::warning('LID sem remoteJidAlt - chat temporário criado', [
                         'lid' => $remoteJid,
                         'chat_name' => $senderName,
                         'chat_id' => $chat->id,
+                        'payload_keys' => array_keys($key),
                     ]);
                 }
             } else {
@@ -607,17 +618,12 @@ class WebhookController extends Controller
                 ->first();
         } else {
             // Para chats individuais, buscar pelo chat_id OU pelo número do cliente
-            // Isso resolve o problema de LID vs número real (mesmo contato, JIDs diferentes)
+            // NÃO buscar por nome pois nomes não são únicos e causam conflito entre contatos
             $conversa = Conversa::where('account_id', $account->id)
                 ->whereIn('status', ['aguardando', 'em_atendimento'])
-                ->where(function ($query) use ($chat, $phoneNumber, $clienteName) {
+                ->where(function ($query) use ($chat, $phoneNumber) {
                     $query->where('chat_id', $chat->id)
                         ->orWhere('cliente_numero', $phoneNumber);
-
-                    // Se tem nome, também busca pelo nome para pegar conversas com LID
-                    if ($clienteName) {
-                        $query->orWhere('cliente_nome', $clienteName);
-                    }
                 })
                 ->first();
         }

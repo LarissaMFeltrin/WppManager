@@ -202,11 +202,8 @@ class HistorySyncService
                     continue;
                 }
 
-                // Verificar duplicata - message_key é UNIQUE globalmente
-                // NÃO mover mensagens automaticamente (pode ser de outro contato com mesmo LID)
-                if (Message::where('message_key', $messageId)
-                    ->orWhere('message_key', 'like', '%' . $messageId)
-                    ->exists()) {
+                // Verificar duplicata por message_key exato (coluna UNIQUE)
+                if (Message::where('message_key', $messageId)->exists()) {
                     $skippedDuplicate++;
                     continue;
                 }

@@ -66,14 +66,10 @@ class EvolutionApiService
 
     public function createInstance(string $instanceName, array $options = []): array
     {
+        // Evolution API v2.x - formato atualizado
         return $this->request('post', '/instance/create', array_merge([
             'instanceName' => $instanceName,
-            'qrcode' => true,
-            'groups_ignore' => false,  // Receber mensagens de grupos
-            'always_online' => false,
-            'read_messages' => false,
-            'read_status' => false,
-            'reject_call' => false,
+            'integration' => 'WHATSAPP-BAILEYS',
         ], $options));
     }
 
@@ -111,14 +107,14 @@ class EvolutionApiService
 
     public function updateInstanceSettings(string $instanceName, array $settings): array
     {
-        // v1.7.x requer todos os campos
+        // Evolution API v2.x - formato atualizado
         $defaults = [
-            'reject_call' => false,
-            'groups_ignore' => false,
-            'always_online' => false,
-            'read_messages' => false,
-            'read_status' => false,
-            'sync_full_history' => false,
+            'rejectCall' => false,
+            'groupsIgnore' => false,
+            'alwaysOnline' => false,
+            'readMessages' => false,
+            'readStatus' => false,
+            'syncFullHistory' => false,
         ];
 
         return $this->request('post', "/settings/set/{$instanceName}", array_merge($defaults, $settings));
@@ -129,34 +125,44 @@ class EvolutionApiService
         return $this->request('get', "/settings/find/{$instanceName}");
     }
 
-    // === QR Code ===
+    // === QR Code e Pairing Code ===
 
     public function getQrCode(string $instanceName): array
     {
         return $this->request('get', "/instance/connect/{$instanceName}");
     }
 
+    /**
+     * Conectar instância via Pairing Code (número de telefone)
+     * Útil para reconectar sem precisar escanear QR code
+     */
+    public function connectWithPairingCode(string $instanceName, string $phoneNumber): array
+    {
+        // Limpar número (remover caracteres não numéricos)
+        $phoneNumber = preg_replace('/\D/', '', $phoneNumber);
+
+        return $this->request('post', "/instance/connect/{$instanceName}", [
+            'number' => $phoneNumber,
+        ]);
+    }
+
     // === Mensagens ===
 
     public function sendText(string $instanceName, string $number, string $text, ?string $quotedMessageId = null, ?string $remoteJid = null, bool $quotedFromMe = false): array
     {
+        // Evolution API v2.3.x - formato simplificado
         $payload = [
             'number' => $number,
-            'textMessage' => [
-                'text' => $text,
-            ],
+            'text' => $text,
         ];
 
         // Se tem mensagem citada, adicionar no payload
         if ($quotedMessageId) {
-            // Formato para Evolution API v1.7.x
-            $payload['options'] = [
-                'quoted' => [
-                    'key' => [
-                        'remoteJid' => $remoteJid ?? ($number . '@s.whatsapp.net'),
-                        'fromMe' => $quotedFromMe,
-                        'id' => $quotedMessageId,
-                    ],
+            $payload['quoted'] = [
+                'key' => [
+                    'remoteJid' => $remoteJid ?? ($number . '@s.whatsapp.net'),
+                    'fromMe' => $quotedFromMe,
+                    'id' => $quotedMessageId,
                 ],
             ];
         }
@@ -166,47 +172,42 @@ class EvolutionApiService
 
     public function sendMedia(string $instanceName, string $number, string $mediaType, string $mediaUrl, ?string $caption = null): array
     {
-        // Formato Evolution API v2.x
-        $mediaMessage = [
+        // Evolution API v2.3.x - formato simplificado
+        $payload = [
+            'number' => $number,
             'mediatype' => $mediaType,
             'media' => $mediaUrl,
         ];
 
         if ($caption) {
-            $mediaMessage['caption'] = $caption;
+            $payload['caption'] = $caption;
         }
 
-        return $this->request('post', "/message/sendMedia/{$instanceName}", [
-            'number' => $number,
-            'mediaMessage' => $mediaMessage,
-        ]);
+        return $this->request('post', "/message/sendMedia/{$instanceName}", $payload);
     }
 
     /**
-     * Enviar mídia usando base64 (Evolution API v1.7.x)
+     * Enviar mídia usando base64 (Evolution API v2.3.x)
      */
     public function sendMediaBase64(string $instanceName, string $number, string $mediaType, string $base64, string $mimeType, ?string $caption = null, ?string $fileName = null): array
     {
-        // Evolution API v1.7.x - base64 PURO sem prefixo data:mime;base64,
-        $mediaMessage = [
+        // Evolution API v2.3.x - formato simplificado
+        $payload = [
+            'number' => $number,
             'mediatype' => $mediaType,
             'mimetype' => $mimeType,
             'media' => $base64,
         ];
 
-        // Caption deve ser string válida, não null
         if ($caption !== null && trim($caption) !== '') {
-            $mediaMessage['caption'] = (string) $caption;
+            $payload['caption'] = (string) $caption;
         }
 
         if ($fileName) {
-            $mediaMessage['fileName'] = $fileName;
+            $payload['fileName'] = $fileName;
         }
 
-        return $this->request('post', "/message/sendMedia/{$instanceName}", [
-            'number' => $number,
-            'mediaMessage' => $mediaMessage,
-        ]);
+        return $this->request('post', "/message/sendMedia/{$instanceName}", $payload);
     }
 
     public function sendImageBase64(string $instanceName, string $number, string $base64, string $mimeType, ?string $caption = null): array
@@ -226,11 +227,11 @@ class EvolutionApiService
 
     public function sendAudioBase64(string $instanceName, string $number, string $base64, string $mimeType): array
     {
-        // Evolution API v1.7.x formato para áudio
+        // Evolution API v2.3.x - formato para áudio em base64
         return $this->request('post', "/message/sendWhatsAppAudio/{$instanceName}", [
             'number' => $number,
-            'encoding' => true,
             'audio' => $base64,
+            'encoding' => true,
         ]);
     }
 
@@ -246,24 +247,21 @@ class EvolutionApiService
 
     public function sendAudio(string $instanceName, string $number, string $audioUrl): array
     {
+        // Evolution API v2.3.x - formato simplificado
         return $this->request('post', "/message/sendWhatsAppAudio/{$instanceName}", [
             'number' => $number,
-            'audioMessage' => [
-                'audio' => $audioUrl,
-            ],
+            'audio' => $audioUrl,
         ]);
     }
 
     public function sendDocument(string $instanceName, string $number, string $documentUrl, string $fileName): array
     {
-        // Formato Evolution API v2.x
+        // Evolution API v2.3.x - formato simplificado
         return $this->request('post', "/message/sendMedia/{$instanceName}", [
             'number' => $number,
-            'mediaMessage' => [
-                'mediatype' => 'document',
-                'media' => $documentUrl,
-                'fileName' => $fileName,
-            ],
+            'mediatype' => 'document',
+            'media' => $documentUrl,
+            'fileName' => $fileName,
         ]);
     }
 
@@ -290,12 +288,10 @@ class EvolutionApiService
             $key['participant'] = $participant;
         }
 
-        // Timeout maior (30s) pois este endpoint pode ser lento na Evolution
+        // Evolution API v2.3.x - formato simplificado (sem reactionMessage aninhado)
         return $this->request('post', "/message/sendReaction/{$instanceName}", [
-            'reactionMessage' => [
-                'key' => $key,
-                'reaction' => $emoji,
-            ],
+            'key' => $key,
+            'reaction' => $emoji,
         ], timeout: 30);
     }
 
@@ -326,13 +322,11 @@ class EvolutionApiService
 
     public function sendPresence(string $instanceName, string $number, string $presence = 'composing'): array
     {
-        // presence: composing, recording, paused - Formato Evolution API v2.x
+        // presence: composing, recording, paused - Formato Evolution API v2.3.x
         return $this->request('post', "/chat/sendPresence/{$instanceName}", [
             'number' => $number,
-            'options' => [
-                'presence' => $presence,
-                'delay' => 1000,
-            ],
+            'presence' => $presence,
+            'delay' => 1000,
         ]);
     }
 
@@ -340,17 +334,55 @@ class EvolutionApiService
 
     public function fetchMessages(string $instanceName, string $remoteJid = '', int $limit = 20): array
     {
-        $payload = ['limit' => $limit];
+        $allMessages = [];
+        $page = 1;
+        $maxPages = 20; // Segurança para não loopear infinito
+        $perPage = min($limit, 100);
 
-        if ($remoteJid) {
-            $payload['where'] = [
-                'key' => [
-                    'remoteJid' => $remoteJid,
-                ],
-            ];
-        }
+        do {
+            $payload = ['limit' => $perPage, 'page' => $page];
 
-        return $this->request('post', "/chat/findMessages/{$instanceName}", $payload);
+            if ($remoteJid) {
+                $payload['where'] = [
+                    'key' => [
+                        'remoteJid' => $remoteJid,
+                    ],
+                ];
+            }
+
+            $result = $this->request('post', "/chat/findMessages/{$instanceName}", $payload);
+
+            if (!$result['success']) {
+                // Se já temos mensagens parciais, retornar elas
+                if (!empty($allMessages)) {
+                    return ['success' => true, 'data' => $allMessages];
+                }
+                return $result;
+            }
+
+            $data = $result['data'];
+
+            // A API retorna {messages: {total, pages, records}} ou array direto
+            if (isset($data['messages']['records'])) {
+                $records = $data['messages']['records'];
+                $totalPages = $data['messages']['pages'] ?? 1;
+            } elseif (is_array($data) && !isset($data['messages'])) {
+                $records = $data;
+                $totalPages = 1;
+            } else {
+                break;
+            }
+
+            $allMessages = array_merge($allMessages, $records);
+
+            if ($page >= $totalPages || $page >= $maxPages || count($allMessages) >= $limit) {
+                break;
+            }
+
+            $page++;
+        } while (true);
+
+        return ['success' => true, 'data' => $allMessages];
     }
 
     // === Chats ===
@@ -402,20 +434,23 @@ class EvolutionApiService
 
     public function setWebhook(string $instanceName, string $webhookUrl, array $events = [], bool $base64 = true): array
     {
+        // Evolution API v2.x - formato com objeto webhook aninhado
         return $this->request('post', "/webhook/set/{$instanceName}", [
-            'enabled' => true,
-            'url' => $webhookUrl,
-            'webhookBase64' => $base64, // Envia base64 da mídia diretamente no webhook
-            'webhookByEvents' => false,
-            'events' => $events ?: [
-                'QRCODE_UPDATED',
-                'MESSAGES_SET',
-                'MESSAGES_UPSERT',
-                'MESSAGES_UPDATE',
-                'MESSAGES_DELETE',
-                'SEND_MESSAGE',
-                'CONNECTION_UPDATE',
-                'PRESENCE_UPDATE',
+            'webhook' => [
+                'enabled' => true,
+                'url' => $webhookUrl,
+                'webhookBase64' => $base64,
+                'webhookByEvents' => false,
+                'events' => $events ?: [
+                    'QRCODE_UPDATED',
+                    'MESSAGES_SET',
+                    'MESSAGES_UPSERT',
+                    'MESSAGES_UPDATE',
+                    'MESSAGES_DELETE',
+                    'SEND_MESSAGE',
+                    'CONNECTION_UPDATE',
+                    'PRESENCE_UPDATE',
+                ],
             ],
         ]);
     }

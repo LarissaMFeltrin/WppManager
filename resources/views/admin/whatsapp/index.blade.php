@@ -44,8 +44,8 @@
                     <td>{{ $account->last_connection?->diffForHumans() ?? 'Nunca' }}</td>
                     <td>
                         @if(!$account->is_connected)
-                            <button class="btn btn-sm btn-success btn-qrcode" data-id="{{ $account->id }}">
-                                <i class="fas fa-qrcode"></i> QR Code
+                            <button class="btn btn-sm btn-success btn-qrcode" data-id="{{ $account->id }}" data-phone="{{ $account->phone_number }}">
+                                <i class="fas fa-qrcode"></i> Conectar
                             </button>
                         @else
                             <form action="{{ route('admin.whatsapp.restart', $account) }}" method="POST" class="d-inline">
@@ -91,22 +91,65 @@
     @endif
 </div>
 
-{{-- Modal QR Code --}}
+{{-- Modal Conexao --}}
 <div class="modal fade" id="qrcodeModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Escanear QR Code</h5>
+                <h5 class="modal-title">Conectar Instancia</h5>
                 <button type="button" class="close" data-dismiss="modal">
                     <span>&times;</span>
                 </button>
             </div>
-            <div class="modal-body text-center">
-                <div id="qrcode-container">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="sr-only">Carregando...</span>
+            <div class="modal-body">
+                {{-- Tabs para escolher metodo --}}
+                <ul class="nav nav-tabs mb-3" id="connectTabs">
+                    <li class="nav-item">
+                        <a class="nav-link active" data-toggle="tab" href="#tabQrCode">
+                            <i class="fas fa-qrcode"></i> QR Code
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-toggle="tab" href="#tabPairingCode">
+                            <i class="fas fa-mobile-alt"></i> Codigo de Pareamento
+                        </a>
+                    </li>
+                </ul>
+
+                <div class="tab-content">
+                    {{-- Tab QR Code --}}
+                    <div class="tab-pane fade show active text-center" id="tabQrCode">
+                        <div id="qrcode-container">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="sr-only">Carregando...</span>
+                            </div>
+                            <p class="mt-2">Gerando QR Code...</p>
+                        </div>
+                        <p class="text-muted small mt-3">
+                            Abra o WhatsApp no celular > Menu > Aparelhos conectados > Conectar aparelho
+                        </p>
                     </div>
-                    <p class="mt-2">Gerando QR Code...</p>
+
+                    {{-- Tab Pairing Code --}}
+                    <div class="tab-pane fade" id="tabPairingCode">
+                        <div class="form-group">
+                            <label>Numero do WhatsApp (com DDI)</label>
+                            <input type="text" id="pairingPhone" class="form-control" placeholder="5511999998888">
+                            <small class="text-muted">Digite o numero completo com codigo do pais</small>
+                        </div>
+                        <button type="button" class="btn btn-success btn-block" id="btnRequestPairingCode">
+                            <i class="fas fa-key"></i> Gerar Codigo de Pareamento
+                        </button>
+                        <div id="pairing-result" class="mt-3" style="display:none;">
+                            <div class="alert alert-success text-center">
+                                <h4 class="mb-2">Codigo de Pareamento:</h4>
+                                <h2 id="pairingCodeDisplay" class="font-weight-bold" style="letter-spacing: 5px;"></h2>
+                                <p class="mb-0 mt-2 small">
+                                    Abra o WhatsApp > Menu > Aparelhos conectados > Conectar aparelho > Conectar com numero
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -117,24 +160,86 @@
 @section('js')
 <script>
 $(function() {
-    $('.btn-qrcode').click(function() {
-        var accountId = $(this).data('id');
-        $('#qrcode-container').html('<div class="spinner-border text-primary"></div><p class="mt-2">Gerando QR Code...</p>');
-        $('#qrcodeModal').modal('show');
+    var currentAccountId = null;
+    var currentPhone = null;
 
-        $.get('/admin/whatsapp/' + accountId + '/qrcode')
+    $('.btn-qrcode').click(function() {
+        currentAccountId = $(this).data('id');
+        currentPhone = $(this).data('phone') || '';
+
+        // Reset modal
+        $('#qrcode-container').html('<div class="spinner-border text-primary"></div><p class="mt-2">Gerando QR Code...</p>');
+        $('#pairing-result').hide();
+        $('#pairingPhone').val(currentPhone);
+        $('#connectTabs a:first').tab('show');
+
+        $('#qrcodeModal').modal('show');
+        loadQrCode();
+    });
+
+    function loadQrCode() {
+        $.get('/admin/whatsapp/' + currentAccountId + '/qrcode')
             .done(function(data) {
-                if (data.qrcode) {
+                if (data.data && data.data.qrcode && data.data.qrcode.base64) {
+                    $('#qrcode-container').html('<img src="data:image/png;base64,' + data.data.qrcode.base64 + '" class="img-fluid" style="max-width: 300px;">');
+                } else if (data.data && data.data.base64) {
+                    $('#qrcode-container').html('<img src="data:image/png;base64,' + data.data.base64 + '" class="img-fluid" style="max-width: 300px;">');
+                } else if (data.qrcode) {
                     $('#qrcode-container').html('<img src="' + data.qrcode + '" class="img-fluid" style="max-width: 300px;">');
                 } else if (data.base64) {
                     $('#qrcode-container').html('<img src="data:image/png;base64,' + data.base64 + '" class="img-fluid" style="max-width: 300px;">');
                 } else {
-                    $('#qrcode-container').html('<div class="alert alert-warning">QR Code nao disponivel. Tente novamente.</div>');
+                    $('#qrcode-container').html('<div class="alert alert-warning">QR Code nao disponivel. <button class="btn btn-sm btn-link" onclick="loadQrCode()">Tentar novamente</button></div>');
                 }
             })
             .fail(function(xhr) {
                 $('#qrcode-container').html('<div class="alert alert-danger">Erro ao gerar QR Code: ' + (xhr.responseJSON?.error || 'Erro desconhecido') + '</div>');
             });
+    }
+
+    $('#btnRequestPairingCode').click(function() {
+        var phone = $('#pairingPhone').val().replace(/\D/g, '');
+
+        if (phone.length < 10) {
+            alert('Digite um numero de telefone valido');
+            return;
+        }
+
+        var btn = $(this);
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Gerando...');
+
+        $.ajax({
+            url: '/admin/whatsapp/' + currentAccountId + '/pairing-code',
+            method: 'POST',
+            data: {
+                _token: '{{ csrf_token() }}',
+                phone_number: phone
+            }
+        })
+        .done(function(data) {
+            if (data.success && data.data && data.data.pairingCode) {
+                $('#pairingCodeDisplay').text(data.data.pairingCode);
+                $('#pairing-result').show();
+            } else if (data.data && data.data.code) {
+                $('#pairingCodeDisplay').text(data.data.code);
+                $('#pairing-result').show();
+            } else {
+                alert('Codigo de pareamento nao disponivel. Tente usar o QR Code.');
+            }
+        })
+        .fail(function(xhr) {
+            alert('Erro: ' + (xhr.responseJSON?.error || 'Erro desconhecido'));
+        })
+        .always(function() {
+            btn.prop('disabled', false).html('<i class="fas fa-key"></i> Gerar Codigo de Pareamento');
+        });
+    });
+
+    // Atualizar QR Code quando trocar de tab
+    $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
+        if ($(e.target).attr('href') === '#tabQrCode') {
+            loadQrCode();
+        }
     });
 });
 </script>

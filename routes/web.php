@@ -39,6 +39,7 @@ Route::prefix('admin')->middleware('auth')->name('admin.')->group(function () {
     Route::post('whatsapp/{whatsapp}/disconnect', [WhatsappAccountController::class, 'disconnect'])->name('whatsapp.disconnect');
     Route::post('whatsapp/{whatsapp}/restart', [WhatsappAccountController::class, 'restart'])->name('whatsapp.restart');
     Route::get('whatsapp/{whatsapp}/qrcode', [WhatsappAccountController::class, 'qrcode'])->name('whatsapp.qrcode');
+    Route::post('whatsapp/{whatsapp}/pairing-code', [WhatsappAccountController::class, 'pairingCode'])->name('whatsapp.pairing-code');
 
     // Conversas
     Route::get('conversas', [ConversaController::class, 'index'])->name('conversas.index');
